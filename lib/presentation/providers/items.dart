@@ -40,6 +40,7 @@ class ItemsController extends _$ItemsController {
   StatusFilter _status = StatusFilter.all;
   String _query = '';
   int _placeholderSeq = 0;
+  DateTime? _lastMutationEnd;
 
   /// Placeholders for creates whose POST is still in flight. Every fetch
   /// result is merged with these so no intermediate fetch (lifecycle rebuild,
@@ -234,6 +235,7 @@ class ItemsController extends _$ItemsController {
       rethrow;
     } finally {
       bus.end();
+      _lastMutationEnd = DateTime.now();
       if (ref.mounted && ok) {
         unawaited(_settleCreate());
       }
@@ -564,10 +566,21 @@ class ItemsController extends _$ItemsController {
     state = AsyncData<List<TaskItem>>(merged);
   }
 
+  /// How long after a mutation ends to suppress poll ticks. A poll that starts
+  /// during/just after a mutation can carry a SQLite pre-commit snapshot and
+  /// clobber the committed state (the Android add-blink); the settle refresh
+  /// is the authority in this window.
+  static const Duration _mutationGrace = Duration(milliseconds: 1200);
+
   void _pollTick() {
     final ViewController viewController =
         ref.read(viewControllerProvider.notifier);
     final ViewState view = ref.read(viewControllerProvider);
+    // Suppress polls during the post-mutation grace window.
+    if (_lastMutationEnd != null &&
+        DateTime.now().difference(_lastMutationEnd!) < _mutationGrace) {
+      return;
+    }
     if (shouldSkipPoll(
       visible: viewController.appVisible && view.mode == ViewMode.app,
       inFlight: _fetchInFlight,
