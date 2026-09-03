@@ -40,6 +40,12 @@ class ItemsController extends _$ItemsController {
   String _query = '';
   int _placeholderSeq = 0;
 
+  /// Placeholders for creates whose POST is still in flight. Every fetch
+  /// result is merged with these so no intermediate fetch (lifecycle rebuild,
+  /// poll, view switch) can drop the optimistic row before the POST commits —
+  /// the race that made Android adds blink out and back in on slow networks.
+  final Map<int, TaskItem> _pendingCreates = <int, TaskItem>{};
+
   @override
   Future<List<TaskItem>> build() async {
     _armTimers();
@@ -166,26 +172,33 @@ class ItemsController extends _$ItemsController {
     // that race made the row vanish and reappear on the next poll.
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
     bus.begin();
-    if (visibleHere && rows != null) {
+    if (rows != null) {
       final DateTime now = DateTime.now().toUtc();
-      _setData(<TaskItem>[
-        TaskItem(
-          id: placeholderId,
-          listId: listId,
-          title: title,
-          notes: notes,
-          priority: priority,
-          dueDate: dueDate,
-          quantity: quantity,
-          position: -1,
-          done: false,
-          recurrence: recurrence,
-          recurrenceInterval: recurrenceInterval,
-          createdAt: now,
-          updatedAt: now,
-        ),
-        ...rows,
-      ]);
+      final TaskItem placeholder = TaskItem(
+        id: placeholderId,
+        listId: listId,
+        title: title,
+        notes: notes,
+        priority: priority,
+        dueDate: dueDate,
+        quantity: quantity,
+        position: -1,
+        done: false,
+        recurrence: recurrence,
+        recurrenceInterval: recurrenceInterval,
+        createdAt: now,
+        updatedAt: now,
+      );
+      if (visibleHere) {
+        // Displayed immediately at the top of the pending block.
+        _setData(<TaskItem>[placeholder, ...rows]);
+      } else {
+        // Not shown in the current view (Done filter / search / other list)
+        // but still tracked so a mid-POST fetch can't lose it; the settle
+        // reconcile surfaces it once the view shows it.
+        _pendingCreates[placeholderId] = placeholder;
+        _setData(rows);
+      }
     }
     var ok = false;
     try {
@@ -202,6 +215,7 @@ class ItemsController extends _$ItemsController {
             recurrenceInterval: recurrenceInterval,
           );
       ok = true;
+      _pendingCreates.remove(placeholderId);
       if (ref.mounted && state.value != null) {
         // Swap the placeholder for the server row, keeping its screen slot.
         _setData(state.value!
@@ -209,6 +223,7 @@ class ItemsController extends _$ItemsController {
             .toList());
       }
     } on Exception {
+      _pendingCreates.remove(placeholderId);
       if (ref.mounted && state.value != null) {
         _setData(state.value!
             .where((TaskItem r) => r.id != placeholderId)
@@ -434,7 +449,7 @@ class ItemsController extends _$ItemsController {
           .read(taskflowRepositoryProvider)
           .fetchItems(listId: listId, status: status, q: q);
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
-        return items;
+        return _withPendingCreates(items, listId, status, q);
       }
       return state.value ?? const <TaskItem>[];
     } on Exception catch (error) {
@@ -449,7 +464,9 @@ class ItemsController extends _$ItemsController {
 
   /// Silent refresh (polls, status/q changes, mutation settles): keeps the
   /// current data on screen until the response lands; errors are swallowed
-  /// (old data stays; the next tick retries).
+  /// (old data stays; the next tick retries). The result passes through
+  /// [_withPendingCreates] so no intermediate fetch can drop an in-flight
+  /// create's placeholder.
   Future<void> _refreshSilently() async {
     if (_fetchInFlight) return;
     _fetchInFlight = true;
@@ -463,7 +480,7 @@ class ItemsController extends _$ItemsController {
           .read(taskflowRepositoryProvider)
           .fetchItems(listId: listId, status: status, q: q);
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
-        _setData(items);
+        _setData(_withPendingCreates(items, listId, status, q));
       }
     } on Exception {
       // Silent path: keep the last good snapshot.
@@ -482,6 +499,33 @@ class ItemsController extends _$ItemsController {
     if (q != _query) return true;
     final ViewState view = ref.read(viewControllerProvider);
     return listId != _listIdOf(view);
+  }
+
+  /// Merges in-flight create placeholders into a fetch result so no fetch can
+  /// momentarily drop an uncommitted row. A placeholder belongs when the
+  /// fetch's context (list/status/query) would show it; duplicates of the
+  /// server row are skipped once the POST commits (the map is emptied then).
+  List<TaskItem> _withPendingCreates(
+    List<TaskItem> items,
+    int? listId,
+    StatusFilter status,
+    String q,
+  ) {
+    if (_pendingCreates.isEmpty) return items;
+    final List<TaskItem> result = <TaskItem>[...items];
+    for (final MapEntry<int, TaskItem> e in _pendingCreates.entries) {
+      final TaskItem p = e.value;
+      final bool sameList = listId == null || listId == p.listId;
+      final bool notFiltered =
+          status != StatusFilter.done && q.trim().isEmpty;
+      if (!sameList || !notFiltered) continue;
+      final bool serverHasIt =
+          result.any((TaskItem r) => r.id == p.id);
+      if (!serverHasIt) {
+        result.insert(0, p);
+      }
+    }
+    return result;
   }
 
   void _setData(List<TaskItem> items) {
