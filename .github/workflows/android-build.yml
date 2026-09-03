@@ -29,6 +29,21 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # Stable release signing (updates without uninstall):
+      # - TASKFLOW_KEYSTORE: base64 of the release keystore (created once,
+      #   stored as a repo secret)
+      # - TASKFLOW_KEYSTORE_PASSWORD / TASKFLOW_KEY_PASSWORD / TASKFLOW_KEY_ALIAS
+      - name: Decode release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.TASKFLOW_KEYSTORE }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/taskflow-release.jks"
+            ls -la "$RUNNER_TEMP/taskflow-release.jks"
+          else
+            echo "No keystore secret — falling back to debug signing"
+          fi
+
       # Generated *.g.dart / *.freezed.dart are committed — no build_runner step needed.
       - name: Analyze
         run: flutter analyze
@@ -37,6 +52,11 @@ jobs:
         run: flutter test
 
       - name: Build APK (release)
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/taskflow-release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.TASKFLOW_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TASKFLOW_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TASKFLOW_KEY_PASSWORD }}
         run: flutter build apk --release --dart-define=API_BASE_URL=${{ inputs.api_base_url || 'http://192.168.1.110:8000' }} --dart-define=TRACE_ADD=${{ inputs.enable_trace || false }}
 
       - name: Upload APK artifact
