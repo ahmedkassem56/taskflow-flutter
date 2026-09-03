@@ -59,8 +59,8 @@ flutter build web --dart-define=API_BASE_URL=http://192.168.1.110:8000
 ### Android
 
 ```bash
-flutter build apk --debug --dart-define=API_BASE_URL=http://192.168.1.110:8000
-# APK: build/app/outputs/flutter-apk/app-debug.apk
+flutter build apk --release --dart-define=API_BASE_URL=http://192.168.1.110:8000
+# APK: build/app/outputs/flutter-apk/app-release.apk
 ```
 
 > The **API base URL is baked at build time**. For a phone on the same LAN as
