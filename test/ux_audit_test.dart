@@ -78,15 +78,15 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'overflow on mobile All-tasks list');
   });
 
-  testWidgets('mobile 360x740: create sheet fits without overflow', (WidgetTester tester) async {
+  testWidgets('mobile 360x740: edit sheet fits without overflow', (WidgetTester tester) async {
     await pumpAt(tester, const Size(360, 740));
-    await tester.tap(find.byKey(const Key('add-task-fab')));
+    // Row tap opens the full edit sheet (fields + delete/action row).
+    await tester.tap(find.text('Milk'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('item-title-field')), findsOneWidget);
-    // scroll to the bottom actions to force full layout
     await tester.ensureVisible(find.byKey(const Key('item-save-button')));
     await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull, reason: 'overflow in create sheet');
+    expect(tester.takeException(), isNull, reason: 'overflow in edit sheet');
   });
 
   testWidgets('mobile 360x740: list-view rows with move arrows fit', (WidgetTester tester) async {
@@ -104,7 +104,7 @@ void main() {
       (WidgetTester tester) async {
     await pumpAt(tester, const Size(360, 740), textScale: 1.3);
     expect(tester.takeException(), isNull, reason: 'overflow at textScale 1.3 (list)');
-    await tester.tap(find.byKey(const Key('add-task-fab')));
+    await tester.tap(find.text('Milk'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.byKey(const Key('item-save-button')));
     await tester.pumpAndSettle();

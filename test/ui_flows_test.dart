@@ -249,27 +249,69 @@ void main() {
       .where((http.Request r) => r.method == method && r.url.path.startsWith(pathPrefix))
       .toList();
 
-  testWidgets('create task via FAB: sheet -> POST -> new row appears', (WidgetTester tester) async {
+  testWidgets('quick add: type + send creates task, field clears, next add works',
+      (WidgetTester tester) async {
     await pumpApp(tester);
 
     expect(find.text('Milk'), findsOneWidget);
     expect(find.text('Report'), findsOneWidget);
+    expect(find.byKey(const Key('quick-add-field')), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('add-task-fab')));
+    // Entry 1: type a title and press the send action (Enter).
+    await tester.enterText(find.byKey(const Key('quick-add-field')), 'Buy bread');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('item-title-field')), findsOneWidget);
+    await tester.pumpAndSettle();
 
-    await tester.enterText(find.byKey(const Key('item-title-field')), 'Buy bread');
-    await tester.ensureVisible(find.byKey(const Key('item-save-button')));
+    final List<http.Request> posts1 = reqs('POST', '/api/items');
+    expect(posts1, hasLength(1));
+    final Map<String, dynamic> body1 = jsonDecode(posts1.single.body) as Map<String, dynamic>;
+    expect(body1, containsPair('title', 'Buy bread'));
+    expect(body1, containsPair('list_id', 1)); // All view default = first list
+    expect(find.text('Buy bread'), findsOneWidget);
+
+    // Field cleared after a successful add.
+    final TextField field = tester.widget<TextField>(find.byKey(const Key('quick-add-field')));
+    expect(field.controller!.text, isEmpty);
+
+    // Entry 2: straight into the next title — no modal, no re-tap.
+    await tester.enterText(find.byKey(const Key('quick-add-field')), 'More milk');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('item-save-button')));
+    await tester.pumpAndSettle();
+
+    final List<http.Request> posts2 = reqs('POST', '/api/items');
+    expect(posts2, hasLength(2));
+    expect(jsonDecode(posts2.last.body), containsPair('title', 'More milk'));
+    expect(find.text('More milk'), findsOneWidget);
+  });
+
+  testWidgets('quick add in a list view targets that list (no picker shown)',
+      (WidgetTester tester) async {
+    await pumpApp(tester);
+
+    // Open the drawer and pick Groceries.
+    await tester.tap(find.byKey(const Key('drawer-button')));
+    await tester.pumpAndSettle();
+    final Finder drawerList = find.descendant(of: find.byType(Drawer), matching: find.text('Groceries'));
+    await tester.tap(drawerList.first);
+    await tester.pumpAndSettle();
+
+    // No list picker in a single-list view; hint names the target list.
+    expect(find.byKey(const Key('quick-add-list-picker')), findsNothing);
+    expect(find.textContaining('Groceries'), findsWidgets);
+
+    await tester.enterText(find.byKey(const Key('quick-add-field')), 'Oats');
+    await tester.tap(find.byKey(const Key('quick-add-submit')));
     await tester.pumpAndSettle();
     await tester.pumpAndSettle();
 
     final List<http.Request> posts = reqs('POST', '/api/items');
     expect(posts, hasLength(1));
-    expect(jsonDecode(posts.single.body), containsPair('title', 'Buy bread'));
-    expect(find.text('Buy bread'), findsOneWidget);
+    expect(jsonDecode(posts.single.body), containsPair('list_id', 1));
+    expect(find.text('Oats'), findsOneWidget);
+    // Work's item is not in this list view.
+    expect(find.text('Report'), findsNothing);
   });
 
   testWidgets('search issues q param and filters rows server-side', (WidgetTester tester) async {

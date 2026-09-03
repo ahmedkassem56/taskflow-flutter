@@ -163,8 +163,9 @@ void main() {
     expect(find.text('Eggs'), findsOneWidget);
     expect(find.byType(Checkbox), findsNWidgets(2));
 
-    // Sidebar entry behind the drawer and the create FAB are present.
-    expect(find.byKey(const Key('add-task-fab')), findsOneWidget);
+    // Sidebar entry behind the drawer and the quick-add composer are present.
+    expect(find.byKey(const Key('quick-add-field')), findsOneWidget);
+    expect(find.byKey(const Key('quick-add-submit')), findsOneWidget);
   });
 
   testWidgets('toggling a task issues a PATCH', (WidgetTester tester) async {

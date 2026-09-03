@@ -75,13 +75,13 @@ class ItemListView extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!reorderable || onReorder == null) {
       return ListView.builder(
-        padding: const EdgeInsets.only(bottom: 96),
+        padding: const EdgeInsets.only(bottom: 12),
         itemCount: items.length,
         itemBuilder: (BuildContext context, int index) => _buildRow(index),
       );
     }
     return ReorderableListView.builder(
-      padding: const EdgeInsets.only(bottom: 96),
+      padding: const EdgeInsets.only(bottom: 12),
       buildDefaultDragHandles: false,
       itemCount: items.length,
       // DESIGN.md §8 ordinal mapping uses the classic onReorder index

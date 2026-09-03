@@ -145,12 +145,6 @@ class HomeShell extends ConsumerWidget {
               const Expanded(child: AppView()),
             ],
           ),
-          floatingActionButton: FloatingActionButton(
-            key: const Key('add-task-fab'),
-            tooltip: 'Add task',
-            onPressed: () => openCreateItemSheet(context, ref),
-            child: const Icon(Icons.add),
-          ),
         );
       },
     );

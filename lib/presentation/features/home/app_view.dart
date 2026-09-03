@@ -23,54 +23,18 @@ import 'widgets/filter_bar.dart';
 import 'widgets/item_list_view.dart';
 import 'widgets/list_actions.dart';
 import 'widgets/list_sidebar.dart';
+import 'widgets/quick_add_bar.dart';
 
-/// Opens the "new task" sheet in app mode.
-///
-/// In the All view a list picker is shown (default: first list); in a list
-/// view the task is created in that list. Exposed for the shell FAB.
-Future<void> openCreateItemSheet(BuildContext context, WidgetRef ref) async {
-  final ViewState viewState = ref.read(viewControllerProvider);
-  final List<TaskList> lists =
-      ref.read(listsControllerProvider).value ?? const <TaskList>[];
-  if (lists.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Create a list first')),
-    );
-    return;
-  }
-  final bool isAll = isAllTasksView(viewState);
-  final int initialListId =
-      isAll ? lists.first.id : (currentListIdOf(viewState) ?? lists.first.id);
-
-  // ADAPT(ViewController): dialog-open bookkeeping suppresses polling while
-  // a modal is up (DESIGN.md §5.2).
-  ref.read(viewControllerProvider.notifier).setDialogOpen(true);
-  try {
-    await showItemEditSheet(
-      context,
-      item: null,
-      lists: lists,
-      initialListId: initialListId,
-      showListPicker: isAll,
-      onSave: (ItemDraft draft) => _saveNewItem(ref, draft),
-    );
-  } finally {
-    ref.read(viewControllerProvider.notifier).setDialogOpen(false);
-  }
-}
-
-/// ADAPT(ItemsController): create item through the app-mode path.
-Future<String?> _saveNewItem(WidgetRef ref, ItemDraft draft) async {
+/// Quick-add one task (title only) to [listId] through the app-mode path.
+/// Returns an error message to toast, or null on success.
+Future<String?> _saveQuickItem(WidgetRef ref, int listId, String title) async {
   try {
     await ref.read(itemsControllerProvider.notifier).createItem(
-          listId: draft.listId,
-          title: draft.title,
-          notes: draft.notes.isEmpty ? null : draft.notes,
-          priority: draft.priority,
-          dueDate: draft.dueDate,
-          quantity: draft.quantity,
-          recurrence: draft.recurrence,
-          recurrenceInterval: draft.recurrenceInterval,
+          listId: listId,
+          title: title,
+          priority: Priority.none,
+          quantity: 1,
+          recurrence: Recurrence.none,
         );
     return null;
   } catch (error) {
@@ -151,6 +115,9 @@ class _AppViewState extends ConsumerState<AppView> {
   StatusFilter _status = StatusFilter.all;
   bool _searchActive = false;
 
+  /// Target list for quick-add in the All view (0 = resolve to first).
+  int _quickListId = 0;
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -227,7 +194,7 @@ class _AppViewState extends ConsumerState<AppView> {
     return const EmptyState(
       icon: Icons.task_alt,
       title: 'No tasks yet',
-      subtitle: 'Tap + to add your first task.',
+      subtitle: 'Type a task below to add it.',
     );
   }
 
@@ -299,6 +266,31 @@ class _AppViewState extends ConsumerState<AppView> {
     }
   }
 
+  /// Resolves the effective quick-add target list for the current view.
+  int _quickTargetListId(List<TaskList> lists) {
+    if (lists.isEmpty) return 0;
+    final ViewState view = ref.read(viewControllerProvider);
+    if (!isAllTasksView(view)) {
+      return currentListIdOf(view) ?? lists.first.id;
+    }
+    if (_quickListId != 0 && lists.any((TaskList l) => l.id == _quickListId)) {
+      return _quickListId;
+    }
+    return lists.first.id;
+  }
+
+  /// Quick-add: create the task, keep the flow moving. If the Done filter is
+  /// active the new (pending) task would be invisible — hop to All so the add
+  /// has visible feedback. Returns an error string for the bar to toast.
+  Future<String?> _quickAdd(String title, int listId) async {
+    if (listId == 0) return 'Create a list first';
+    final String? error = await _saveQuickItem(ref, listId, title);
+    if (error == null && _status == StatusFilter.done) {
+      _onStatusChanged(StatusFilter.all);
+    }
+    return error;
+  }
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
@@ -312,6 +304,8 @@ class _AppViewState extends ConsumerState<AppView> {
 
     final bool isAll = isAllTasksView(viewState);
     final int? listId = currentListIdOf(viewState);
+    final int quickListId = _quickTargetListId(lists);
+    final bool quickShowPicker = isAll && lists.length > 1;
     TaskList? currentList;
     int totalCount = 0;
     int pendingCount = 0;
@@ -413,6 +407,14 @@ class _AppViewState extends ConsumerState<AppView> {
           onQueryChanged: _onQueryChanged,
         ),
         Expanded(child: _buildBody(itemsAsync)),
+        QuickAddBar(
+          lists: lists,
+          selectedListId: quickListId,
+          showListPicker: quickShowPicker,
+          enabled: lists.isNotEmpty,
+          onListChanged: (int id) => setState(() => _quickListId = id),
+          onSubmit: (String title) => _quickAdd(title, quickListId),
+        ),
       ],
     );
   }
