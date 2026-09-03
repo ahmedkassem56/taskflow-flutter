@@ -150,9 +150,11 @@ class ItemsController extends _$ItemsController {
     int? recurrenceInterval,
   }) async {
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
-    bus.begin();
     _lastMutationEnd = null;
-    var ok = false;
+    // Force-start BEFORE the POST so the request is truly concurrent with
+    // everything else, and bump the gen AFTER the POST lands so the refresh
+    // (which follows) is guaranteed to apply.
+    bus.begin();
     try {
       await ref
           .read(taskflowRepositoryProvider)
@@ -166,20 +168,19 @@ class ItemsController extends _$ItemsController {
             recurrence: recurrence,
             recurrenceInterval: recurrenceInterval,
           );
-      ok = true;
-    } on Exception {
-      rethrow;
     } finally {
       bus.end();
-      _lastMutationEnd = DateTime.now();
-      if (ref.mounted && ok) {
-        // One authoritative refresh (items + list counts) — awaited so the
-        // row is actually committed server-side, keeping the UI honest.
-        await Future.wait<void>(<Future<void>>[
-          _refreshSilently(),
-          _refreshListsSilently(),
-        ]);
-      }
+    }
+    _lastMutationEnd = DateTime.now();
+    if (!ref.mounted) return;
+    // One authoritative refresh (items + list counts). Must run even if a
+    // background poll is in flight — a create's settle cannot wait for the
+    // next 5s tick (that wait is the "takes a few seconds" bug). The
+    // mutation gen has moved (begin+end), so any in-flight poll is discarded
+    // at completion; this refresh applies the committed row.
+    await _refreshSilently(force: true);
+    if (ref.mounted) {
+      await _refreshListsSilently();
     }
   }
 
@@ -389,13 +390,13 @@ class ItemsController extends _$ItemsController {
     }
   }
 
-  /// Silent refresh (polls, status/q changes, mutation settles): keeps the
-  /// current data on screen until the response lands; errors are swallowed
-  /// (old data stays; the next tick retries). The result passes through
-  /// [_withPendingCreates] so no intermediate fetch can drop an in-flight
-  /// create's placeholder.
-  Future<void> _refreshSilently() async {
-    if (_fetchInFlight) return;
+  /// Silent refresh (polls, status/q changes): keeps the current data on screen
+  /// until the response lands; errors are swallowed. When [force] is true the
+  /// in-flight guard is bypassed — used by mutation settles (a create must
+  /// fetch its committed row NOW, not on the next 5s tick; an in-flight poll
+  /// started before the mutation is discarded by the gen guard anyway).
+  Future<void> _refreshSilently({bool force = false}) async {
+    if (_fetchInFlight && !force) return;
     _fetchInFlight = true;
     final int gen = ref.read(mutationBusProvider.notifier).gen;
     final ViewState view = ref.read(viewControllerProvider);
