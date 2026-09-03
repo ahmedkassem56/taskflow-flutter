@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../data/models/task_list.dart';
 import '../../../common/confirm_dialog.dart';
+import '../../../common/format.dart';
 import '../../../providers/lists.dart';
 import '../../share/share_dialog.dart';
 
@@ -32,7 +33,7 @@ Future<void> renameListFlow(
   } catch (error) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$error')),
+      SnackBar(content: Text(friendlyErrorMessage(error))),
     );
   }
 }
@@ -55,7 +56,7 @@ Future<void> deleteListFlow(
   } catch (error) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$error')),
+      SnackBar(content: Text(friendlyErrorMessage(error))),
     );
   }
 }
@@ -144,7 +145,7 @@ Future<void> createListFlow(
   } catch (error) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$error')),
+      SnackBar(content: Text(friendlyErrorMessage(error))),
     );
   }
 }

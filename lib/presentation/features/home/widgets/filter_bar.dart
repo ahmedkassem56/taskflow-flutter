@@ -32,9 +32,11 @@ class FilterBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Row(
-        children: <Widget>[
-          SegmentedButton<StatusFilter>(
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // Narrow layouts stack the controls; wide keeps them on one line.
+          final bool stacked = constraints.maxWidth < 520;
+          final Widget segmented = SegmentedButton<StatusFilter>(
             showSelectedIcon: false,
             style: ButtonStyle(
               visualDensity: VisualDensity.compact,
@@ -53,34 +55,50 @@ class FilterBar extends StatelessWidget {
             onSelectionChanged: (Set<StatusFilter> selection) {
               onStatusChanged(selection.first);
             },
-          ),
-          if (showSearch) ...<Widget>[
-            const SizedBox(width: 12),
-            Expanded(
-              child: TextField(
-                key: const Key('filter-search'),
-                controller: searchController,
-                onChanged: onQueryChanged,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  hintText: 'Search tasks',
-                  prefixIcon: const Icon(Icons.search, size: 20),
-                  isDense: true,
-                  suffixIcon: searchController.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Clear search',
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: () {
-                            searchController.clear();
-                            onQueryChanged('');
-                          },
-                        ),
-                ),
-              ),
+          );
+          final Widget search = TextField(
+            key: const Key('filter-search'),
+            controller: searchController,
+            onChanged: onQueryChanged,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search tasks',
+              prefixIcon: const Icon(Icons.search, size: 20),
+              isDense: true,
+              suffixIcon: searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      icon: const Icon(Icons.close, size: 18),
+                      onPressed: () {
+                        searchController.clear();
+                        onQueryChanged('');
+                      },
+                    ),
             ),
-          ],
-        ],
+          );
+          if (!stacked) {
+            return Row(
+              children: <Widget>[
+                segmented,
+                if (showSearch) ...<Widget>[
+                  const SizedBox(width: 12),
+                  Expanded(child: search),
+                ],
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Align(alignment: Alignment.centerLeft, child: segmented),
+              if (showSearch) ...<Widget>[
+                const SizedBox(height: 8),
+                search,
+              ],
+            ],
+          );
+        },
       ),
     );
   }

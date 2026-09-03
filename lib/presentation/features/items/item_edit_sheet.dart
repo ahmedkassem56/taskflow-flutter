@@ -404,6 +404,7 @@ class _ItemEditSheetState extends State<_ItemEditSheet> {
                   Expanded(
                     child: DropdownButtonFormField<Priority>(
                       initialValue: _priority,
+                      isExpanded: true,
                       decoration: const InputDecoration(
                         labelText: 'Priority',
                         prefixIcon: Icon(Icons.flag_outlined, size: 20),
@@ -425,7 +426,13 @@ class _ItemEditSheetState extends State<_ItemEditSheet> {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                Text(priorityLabel(p) ?? 'None'),
+                                Flexible(
+                                  child: Text(
+                                    priorityLabel(p) ?? 'None',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -443,6 +450,7 @@ class _ItemEditSheetState extends State<_ItemEditSheet> {
                   Expanded(
                     child: DropdownButtonFormField<Recurrence>(
                       initialValue: _recurrence,
+                      isExpanded: true,
                       decoration: const InputDecoration(
                         labelText: 'Repeats',
                         prefixIcon: Icon(Icons.repeat, size: 20),
@@ -486,38 +494,48 @@ class _ItemEditSheetState extends State<_ItemEditSheet> {
                 ),
               ],
               const SizedBox(height: 20),
-              Row(
+              // Destructive action left (edit mode); Cancel/Save end-aligned in
+              // a Wrap so Save drops to its own line on narrow widths / large
+              // text instead of overflowing.
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  if (item != null && widget.onDelete != null) ...<Widget>[
-                    TextButton.icon(
-                      onPressed: _saving ? null : _delete,
-                      style: TextButton.styleFrom(
-                        foregroundColor: scheme.error,
+                  if (item != null && widget.onDelete != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: _saving ? null : _delete,
+                        style: TextButton.styleFrom(
+                          foregroundColor: scheme.error,
+                        ),
+                        icon: const Icon(Icons.delete_outline, size: 20),
+                        label: const Text('Delete'),
                       ),
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      label: const Text('Delete'),
                     ),
-                    const Spacer(),
-                  ] else ...<Widget>[
-                    const Spacer(),
-                  ],
-                  TextButton(
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                    child: const Text('Cancel'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    key: const Key('item-save-button'),
-                    onPressed: _saving ? null : _submit,
-                    child: _saving
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Text(_isCreate ? 'Add task' : 'Save'),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: <Widget>[
+                      TextButton(
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        key: const Key('item-save-button'),
+                        onPressed: _saving ? null : _submit,
+                        child: _saving
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Text(_isCreate ? 'Add task' : 'Save'),
+                      ),
+                    ],
                   ),
                 ],
               ),

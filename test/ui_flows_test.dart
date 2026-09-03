@@ -68,6 +68,9 @@ class FakeBackend {
   late List<Map<String, dynamic>> items;
   int _nextItemId = 200;
 
+  /// When true, DELETE /api/items/* answers 500 (tests error visibility).
+  bool failItemDeletes = false;
+
   void reset() {
     requests.clear();
     lists = <Map<String, dynamic>>[
@@ -203,6 +206,9 @@ class FakeBackend {
       return _json(<String, Object?>{'item': item, 'spawned': null});
     }
     if (method == 'DELETE' && path.startsWith('/api/items/')) {
+      if (failItemDeletes) {
+        return _json(<String, Object>{'detail': 'Simulated server failure'}, 500);
+      }
       final int id = int.parse(path.split('/')[3]);
       final Map<String, dynamic> item = items.firstWhere((Map<String, dynamic> i) => i['id'] == id);
       items.removeWhere((Map<String, dynamic> i) => i['id'] == id);

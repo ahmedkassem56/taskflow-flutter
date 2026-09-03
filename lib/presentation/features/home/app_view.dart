@@ -96,7 +96,7 @@ Future<void> openEditItemSheet(
       initialListId: item.listId,
       showListPicker: false,
       onSave: (ItemDraft draft) => _saveEditedItem(ref, item, draft),
-      onDelete: () => _deleteItem(ref, item),
+      onDelete: () => _deleteItem(context, ref, item),
     );
   } finally {
     ref.read(viewControllerProvider.notifier).setDialogOpen(false);
@@ -126,15 +126,16 @@ Future<String?> _saveEditedItem(
   }
 }
 
-/// ADAPT(ItemsController): delete an item.
-Future<void> _deleteItem(WidgetRef ref, TaskItem item) async {
+/// ADAPT(ItemsController): delete an item. On failure the user is told — a
+/// lost delete must never be silent.
+Future<void> _deleteItem(BuildContext context, WidgetRef ref, TaskItem item) async {
   try {
     await ref.read(itemsControllerProvider.notifier).deleteItem(item.id);
   } catch (error) {
-    final String message = friendlyErrorMessage(error);
-    // Deletion happens from the sheet; surface the error via the app root.
-    // ignore: avoid_print
-    debugPrint('deleteItem failed: $message');
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(friendlyErrorMessage(error))),
+    );
   }
 }
 

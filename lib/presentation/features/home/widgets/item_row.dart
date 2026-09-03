@@ -28,7 +28,12 @@ class _MetaChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
+    // Colored labels are tinted toward onSurface so chip text clears WCAG AA
+    // (4.5:1) on surfaceContainerHighest in both themes; the dot stays vivid.
     final Color effective = color ?? scheme.onSurfaceVariant;
+    final Color labelColor = color == null
+        ? scheme.onSurfaceVariant
+        : Color.lerp(color, scheme.onSurface, 0.38)!;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -55,7 +60,7 @@ class _MetaChip extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: effective,
+              color: labelColor,
               fontSize: 11.5,
               fontWeight: FontWeight.w500,
               height: 1.2,

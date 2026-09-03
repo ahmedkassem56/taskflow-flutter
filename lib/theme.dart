@@ -21,8 +21,9 @@ const Color kPriorityHigh = Color(0xFFE5484D);
 /// Priority medium amber (Radix amber 11).
 const Color kPriorityMedium = Color(0xFFB25E09);
 
-/// Priority low green (Radix green 9).
-const Color kPriorityLow = Color(0xFF30A46C);
+/// Priority low green (Radix green 9, deepened slightly so the dot and text
+/// clear WCAG on light chip surfaces — #248F5F).
+const Color kPriorityLow = Color(0xFF248F5F);
 
 /// Priority chip color for the given wire priority name.
 ///
@@ -60,7 +61,9 @@ ColorScheme buildLightColorScheme() {
     surfaceContainerHighest: const Color(0xFFECECF0),
     onSurfaceVariant: const Color(0xFF4A4A52),
     outline: const Color(0xFFC9C9D1),
-    error: kPriorityHigh,
+    // Slightly deeper red than the priority token so white/on-error text and
+    // error-colored text clear WCAG AA (4.5:1) on light surfaces (#CB3A3F).
+    error: const Color(0xFFCB3A3F),
     onError: const Color(0xFFFFFFFF),
     errorContainer: const Color(0xFFFFE0E0),
     onErrorContainer: const Color(0xFF7A1F22),
