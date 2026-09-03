@@ -17,7 +17,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:taskflow_app/app.dart';
 import 'package:taskflow_app/data/services/api_client.dart';
-import 'package:taskflow_app/presentation/features/home/widgets/item_row.dart';
 import 'package:taskflow_app/presentation/providers/api_client.dart';
 
 String _iso(int day) => '2026-09-${day.toString().padLeft(2, '0')}T10:00:00.000000Z';
@@ -181,6 +180,23 @@ class FakeBackend {
           final List<Map<String, dynamic>> pending =
               items.where((Map<String, dynamic> i) => i['list_id'] == listId2 && i['done'] == false).toList();
           item['position'] = pending.length;
+        }
+        return _json(<String, Object?>{'item': item, 'spawned': null});
+      }
+      if (body.containsKey('move_to')) {
+        final int target = (body['move_to'] as num).toInt();
+        final int listId = item['list_id'] as int;
+        final List<Map<String, dynamic>> group = items
+            .where((Map<String, dynamic> i) =>
+                i['list_id'] == listId && i['done'] == item['done'])
+            .toList()
+          ..sort((Map<String, dynamic> a, Map<String, dynamic> b) =>
+              ((a['position'] as num) - (b['position'] as num)).compareTo(0));
+        group.removeWhere((Map<String, dynamic> i) => i['id'] == id);
+        final int clamped = target.clamp(0, group.length);
+        group.insert(clamped, item);
+        for (int i = 0; i < group.length; i++) {
+          group[i]['position'] = i;
         }
         return _json(<String, Object?>{'item': item, 'spawned': null});
       }
@@ -353,11 +369,11 @@ void main() {
     expect(find.text('Cheese'), findsOneWidget);
   });
 
-  testWidgets('open list from drawer; move down issues move PATCH and reorders', (WidgetTester tester) async {
+  testWidgets('drag handle reorders: PATCH move_to and rows swap', (WidgetTester tester) async {
     await pumpApp(tester);
 
     // Open the drawer and pick Groceries (2 pending + 1 done).
-    await tester.tap(find.byIcon(Icons.menu));
+    await tester.tap(find.byKey(const Key('drawer-button')));
     await tester.pumpAndSettle();
     final Finder drawerList = find.descendant(of: find.byType(Drawer), matching: find.text('Groceries'));
     await tester.tap(drawerList.first);
@@ -368,22 +384,23 @@ void main() {
     expect(find.text('Cheese'), findsOneWidget);
     expect(find.text('Report'), findsNothing);
 
-    // Move-down arrow on Milk's row.
-    final Finder milkRow = find.ancestor(of: find.text('Milk'), matching: find.byType(ItemRow));
-    final Finder downArrow = find.descendant(of: milkRow, matching: find.byTooltip('Move down'));
-    expect(downArrow, findsOneWidget);
-
+    // Each reorderable row shows a drag handle; Milk sits above Cheese.
+    expect(find.byKey(const Key('row-drag-handle-101')), findsOneWidget);
     final double milkY = tester.getTopLeft(find.text('Milk')).dy;
     final double cheeseY = tester.getTopLeft(find.text('Cheese')).dy;
-    expect(milkY, lessThan(cheeseY)); // Milk above Cheese
+    expect(milkY, lessThan(cheeseY));
 
-    await tester.tap(downArrow);
+    // Drag Milk's handle down past Cheese (one full row + margin).
+    await tester.drag(
+      find.byKey(const Key('row-drag-handle-101')),
+      Offset(0, tester.getSize(find.text('Milk')).height * 1.8),
+    );
     await tester.pumpAndSettle();
     await tester.pumpAndSettle();
 
-    final List<http.Request> patches = reqs('PATCH', '/api/items/101');
-    expect(patches, hasLength(1));
-    expect(jsonDecode(patches.single.body), containsPair('move', 'down'));
+    final List<http.Request> reorders = reqs('PATCH', '/api/items/101');
+    expect(reorders, isNotEmpty);
+    expect(jsonDecode(reorders.first.body), containsPair('move_to', 1));
 
     final double milkY2 = tester.getTopLeft(find.text('Milk')).dy;
     final double cheeseY2 = tester.getTopLeft(find.text('Cheese')).dy;

@@ -224,12 +224,6 @@ class _AppViewState extends ConsumerState<AppView> {
       onTapItem: (TaskItem item) => openEditItemSheet(context, ref, item),
       listNameOf: isAllTasksView(viewState) ? listNameOf : null,
       reorderable: reorderEnabled,
-      onMoveUp: reorderEnabled
-          ? (TaskItem item) => _moveItem(item, 'up')
-          : null,
-      onMoveDown: reorderEnabled
-          ? (TaskItem item) => _moveItem(item, 'down')
-          : null,
       onReorder: reorderEnabled ? _reorder : null,
       // ADAPT(ViewController): rearrange flag suppresses polls during drags.
       onRearrangeChanged: (bool active) {
@@ -243,15 +237,6 @@ class _AppViewState extends ConsumerState<AppView> {
     try {
       // ADAPT(ItemsController): optimistic toggle with spawned handling.
       await ref.read(itemsControllerProvider.notifier).toggleDone(item);
-    } catch (error) {
-      _showError(error);
-    }
-  }
-
-  Future<void> _moveItem(TaskItem item, String direction) async {
-    try {
-      // ADAPT(ItemsController): PATCH {'move': 'up'|'down'}.
-      await ref.read(itemsControllerProvider.notifier).moveItem(item, direction);
     } catch (error) {
       _showError(error);
     }

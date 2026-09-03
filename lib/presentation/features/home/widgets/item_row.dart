@@ -1,9 +1,12 @@
-/// One task row: checkbox, title/notes, meta chips and optional move arrows.
+/// One task row: checkbox, title/notes, meta chips and an optional trailing
+/// drag handle.
 ///
 /// Rows are intentionally dumb — the parent list owns reorder wrapping
-/// (`ReorderableDelayedDragStartListener`) and passes callbacks in. Arrows
-/// are shown only when reorder is permitted for the current context
-/// (DESIGN.md §8); when [onMoveUp]/[onMoveDown] are null they are hidden.
+/// (`ReorderableDelayedDragStartListener` around the row for long-press drag,
+/// plus an immediate `ReorderableDragStartListener` around [trailing] for the
+/// visible drag handle) and passes callbacks in. When [trailing] is null the
+/// handle area is hidden entirely. [interactive] gates the checkbox; when
+/// `false` (read-only share) taps do nothing at all (JS parity).
 library;
 
 import 'package:flutter/material.dart';
@@ -85,8 +88,7 @@ class ItemRow extends StatelessWidget {
     this.onTap,
     this.listName,
     this.interactive = true,
-    this.onMoveUp,
-    this.onMoveDown,
+    this.trailing,
     this.checkboxEnabled = true,
   });
 
@@ -96,9 +98,9 @@ class ItemRow extends StatelessWidget {
   final String? listName;
   final bool interactive;
 
-  /// Move-arrow callbacks; when both are null the arrows column is hidden.
-  final VoidCallback? onMoveUp;
-  final VoidCallback? onMoveDown;
+  /// Optional right-edge widget (e.g. the reorder drag handle, built by the
+  /// parent with its own drag listener). Null hides the column entirely.
+  final Widget? trailing;
 
   /// False while an optimistic toggle for this row is in flight.
   final bool checkboxEnabled;
@@ -164,7 +166,7 @@ class ItemRow extends StatelessWidget {
         ),
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.only(top: 10, bottom: 10),
+            padding: const EdgeInsets.symmetric(vertical: 10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -200,40 +202,10 @@ class ItemRow extends StatelessWidget {
             ),
           ),
         ),
-        if (onMoveUp != null || onMoveDown != null)
+        if (trailing != null)
           Padding(
-            padding: const EdgeInsets.only(top: 6, right: 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (onMoveUp != null)
-                  IconButton(
-                    onPressed: onMoveUp,
-                    tooltip: 'Move up',
-                    icon: const Icon(Icons.keyboard_arrow_up),
-                    visualDensity: VisualDensity.compact,
-                    iconSize: 20,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 34,
-                      minHeight: 28,
-                    ),
-                  ),
-                if (onMoveDown != null)
-                  IconButton(
-                    onPressed: onMoveDown,
-                    tooltip: 'Move down',
-                    icon: const Icon(Icons.keyboard_arrow_down),
-                    visualDensity: VisualDensity.compact,
-                    iconSize: 20,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 34,
-                      minHeight: 28,
-                    ),
-                  ),
-              ],
-            ),
+            padding: const EdgeInsets.only(right: 4),
+            child: trailing,
           ),
       ],
     );

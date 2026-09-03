@@ -89,15 +89,15 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'overflow in edit sheet');
   });
 
-  testWidgets('mobile 360x740: list-view rows with move arrows fit', (WidgetTester tester) async {
+  testWidgets('mobile 360x740: list-view rows with drag handle fit', (WidgetTester tester) async {
     await pumpAt(tester, const Size(360, 740));
     await tester.tap(find.byKey(const Key('drawer-button')));
     await tester.pumpAndSettle();
     final Finder drawerList = find.descendant(of: find.byType(Drawer), matching: find.text('Groceries'));
     await tester.tap(drawerList.first);
     await tester.pumpAndSettle();
-    expect(find.byTooltip('Move down'), findsWidgets);
-    expect(tester.takeException(), isNull, reason: 'overflow with arrow column on mobile');
+    expect(find.byKey(const Key('row-drag-handle-101')), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: 'overflow with drag handle on mobile');
   });
 
   testWidgets('large text scale 1.3 on 360dp: no overflow in list or sheet',

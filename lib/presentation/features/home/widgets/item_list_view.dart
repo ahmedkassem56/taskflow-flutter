@@ -1,10 +1,11 @@
 /// Shared scrollable task list used by the app view and the share view.
 ///
-/// Renders [ItemRow]s in server order. When [reorderable] is true the list is
-/// a [ReorderableListView] with every row wrapped in a
-/// [ReorderableDelayedDragStartListener] (hold ~500 ms to drag — short taps
-/// still open the edit sheet); otherwise it is a plain list (read-only shares,
-/// All view). Arrows are exposed only while [reorderable].
+/// Renders [ItemRow]s separated by hairline dividers (web-parity rhythm). When
+/// [reorderable] is true each row shows a trailing drag handle (immediate
+/// drag) and the whole row also supports hold-to-drag
+/// ([ReorderableDelayedDragStartListener]) — short taps still open the edit
+/// sheet. Otherwise it is a plain list (read-only shares, All view) with no
+/// handles.
 library;
 
 import 'package:flutter/material.dart';
@@ -20,8 +21,6 @@ class ItemListView extends StatelessWidget {
     this.onTapItem,
     this.listNameOf,
     this.reorderable = false,
-    this.onMoveUp,
-    this.onMoveDown,
     this.onReorder,
     this.onRearrangeChanged,
     this.checkboxEnabled = true,
@@ -37,10 +36,8 @@ class ItemListView extends StatelessWidget {
   /// chip; null hides the chip entirely.
   final String? Function(int listId)? listNameOf;
 
-  /// Enables hold-to-drag reorder. Requires [onReorder].
+  /// Enables reorder (drag handle + hold-to-drag). Requires [onReorder].
   final bool reorderable;
-  final ValueChanged<TaskItem>? onMoveUp;
-  final ValueChanged<TaskItem>? onMoveDown;
   final void Function(int oldIndex, int newIndex)? onReorder;
 
   /// Drag lifecycle hook (poll suppression), DESIGN.md §5.2.
@@ -49,9 +46,22 @@ class ItemListView extends StatelessWidget {
   /// False while an optimistic toggle is in flight (DESIGN.md §5.3).
   final bool checkboxEnabled;
 
-  Widget _buildRow(int index) {
+  Widget _hairline(BuildContext context) => Divider(
+        height: 1,
+        thickness: 1,
+        indent: 52,
+        endIndent: 0,
+        color: Theme.of(context)
+            .colorScheme
+            .outlineVariant
+            .withValues(alpha: 0.45),
+      );
+
+  /// One keyed row: content + a hairline beneath it (except the last row).
+  Widget _buildRow(BuildContext context, int index) {
     final TaskItem item = items[index];
-    final bool interactive = onTapItem != null || onMoveUp != null;
+    final bool isLast = index == items.length - 1;
+    final bool interactive = onTapItem != null;
     final Widget row = ItemRow(
       key: ValueKey<int>(item.id),
       item: item,
@@ -60,14 +70,38 @@ class ItemListView extends StatelessWidget {
       listName: listNameOf == null ? null : listNameOf!(item.listId),
       interactive: interactive,
       checkboxEnabled: checkboxEnabled,
-      onMoveUp: onMoveUp == null ? null : () => onMoveUp!(item),
-      onMoveDown: onMoveDown == null ? null : () => onMoveDown!(item),
+      trailing: !reorderable || onReorder == null
+          ? null
+          : ReorderableDragStartListener(
+              index: index,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: Icon(
+                  Icons.drag_indicator,
+                  key: Key('row-drag-handle-${item.id}'),
+                  size: 20,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurfaceVariant
+                      .withValues(alpha: 0.55),
+                ),
+              ),
+            ),
     );
-    if (!reorderable || onReorder == null) return row;
+
+    final Widget content = isLast
+        ? row
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[row, _hairline(context)],
+          );
+
+    if (!reorderable || onReorder == null) return content;
+    // Hold-to-drag anywhere on the row (long press); short taps still edit.
     return ReorderableDelayedDragStartListener(
       key: ValueKey<int>(item.id),
       index: index,
-      child: row,
+      child: content,
     );
   }
 
@@ -77,7 +111,7 @@ class ItemListView extends StatelessWidget {
       return ListView.builder(
         padding: const EdgeInsets.only(bottom: 12),
         itemCount: items.length,
-        itemBuilder: (BuildContext context, int index) => _buildRow(index),
+        itemBuilder: (BuildContext context, int index) => _buildRow(context, index),
       );
     }
     return ReorderableListView.builder(
@@ -109,7 +143,7 @@ class ItemListView extends StatelessWidget {
           child: child,
         );
       },
-      itemBuilder: (BuildContext context, int index) => _buildRow(index),
+      itemBuilder: (BuildContext context, int index) => _buildRow(context, index),
     );
   }
 }

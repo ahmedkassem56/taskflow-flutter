@@ -77,8 +77,14 @@ class _QuickAddBarState extends State<QuickAddBar> {
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(error)));
     }
-    // Refocus so the next entry is one keystroke away (JS-composer parity).
-    FocusScope.of(context).requestFocus(_focusNode);
+    // The field is never disabled, so focus (and the mobile keyboard) is
+    // retained through the whole add. Re-assert focus next frame as cheap
+    // insurance against IMEs that dismiss on the send action.
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (mounted && !_focusNode.hasFocus) {
+        _focusNode.requestFocus();
+      }
+    });
   }
 
   @override
@@ -96,7 +102,9 @@ class _QuickAddBarState extends State<QuickAddBar> {
       key: const Key('quick-add-field'),
       controller: _controller,
       focusNode: _focusNode,
-      enabled: widget.enabled && !_busy,
+      // NOTE: never disable while busy — disabling a focused field drops focus
+      // and closes the mobile keyboard mid-flow. _submit guards re-entry.
+      enabled: widget.enabled,
       textInputAction: TextInputAction.send,
       onSubmitted: (String _) => _submit(),
       decoration: InputDecoration(

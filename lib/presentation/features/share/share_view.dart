@@ -243,10 +243,6 @@ class _ShareViewState extends ConsumerState<ShareView> {
       onTapItem: canEdit ? _openEdit : null,
       listNameOf: null,
       reorderable: reorderEnabled,
-      onMoveUp: reorderEnabled ? (TaskItem item) => _moveItem(item, 'up') : null,
-      onMoveDown: reorderEnabled
-          ? (TaskItem item) => _moveItem(item, 'down')
-          : null,
       onReorder: reorderEnabled ? _reorder : null,
     );
   }
@@ -255,17 +251,6 @@ class _ShareViewState extends ConsumerState<ShareView> {
     try {
       // ADAPT(ShareController): toggle via /api/shared/{token}/items.
       await ref.read(shareControllerProvider.notifier).toggleDone(item);
-    } catch (error) {
-      _showError(error);
-    }
-  }
-
-  Future<void> _moveItem(TaskItem item, String direction) async {
-    try {
-      // ADAPT(ShareController): move via the shared endpoint.
-      await ref
-          .read(shareControllerProvider.notifier)
-          .moveItem(item, direction);
     } catch (error) {
       _showError(error);
     }
