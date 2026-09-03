@@ -13,10 +13,12 @@ APK via GitHub Actions later. Coexists with the JS frontend until approved.
   - list views: sidebar lists + "All tasks", pending/done/all filter
   - composer: title, notes, due date, priority, quantity, recurrence
   - edit/delete items; toggle done; rename/delete lists
-  - reorder via up/down arrows AND drag (hold to drag) within a list
+  - reorder via drag (handle + hold-to-drag) within a list
   - dark/light theme toggle, persisted
   - share: view a shared list (read-only or edit per token permission)
   - auto-refresh polling (5s) while visible
+  - quick-add composer (type + Enter rapid entry; non-optimistic create —
+    the row appears once the server commits, never flickers)
 - R3 Auth/multi-user explicitly OUT of scope (later phase).
 - R4 Runs on Flutter Web in Chromium here; Android project scaffolding present
   (no local APK build).

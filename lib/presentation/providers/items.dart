@@ -39,14 +39,7 @@ class ItemsController extends _$ItemsController {
   bool _fetchInFlight = false;
   StatusFilter _status = StatusFilter.all;
   String _query = '';
-  int _placeholderSeq = 0;
   DateTime? _lastMutationEnd;
-
-  /// Placeholders for creates whose POST is still in flight. Every fetch
-  /// result is merged with these so no intermediate fetch (lifecycle rebuild,
-  /// poll, view switch) can drop the optimistic row before the POST commits —
-  /// the race that made Android adds blink out and back in on slow networks.
-  final Map<int, TaskItem> _pendingCreates = <int, TaskItem>{};
 
   @override
   Future<List<TaskItem>> build() async {
@@ -139,12 +132,13 @@ class ItemsController extends _$ItemsController {
     }
   }
 
-  /// Optimistic create (quick-add): the new pending row is inserted at the
-  /// top of the pending block immediately (server semantics: new-on-top), the
-  /// POST runs, then the placeholder is swapped for the server row. The
-  /// settle refresh of items + list counts runs in the background — the UI
-  /// must not wait for it (that serial wait made quick-add feel 1-2 s slow).
-  /// On error the placeholder is rolled back and the error rethrown.
+  /// Create (app mode): no optimism — the POST is awaited and then a single
+  /// authoritative refresh lands the new row (server new-on-top). The
+  /// composer clears its field immediately on submit for the rapid-entry
+  /// feel; the row appears within one RTT (~50-300ms). Because the row is
+  /// never inserted client-side, no poll, snapshot or rebuild can ever make
+  /// it flash out of existence — the async-creation race class is gone by
+  /// construction.
   Future<void> createItem({
     required int listId,
     required String title,
@@ -155,51 +149,12 @@ class ItemsController extends _$ItemsController {
     required Recurrence recurrence,
     int? recurrenceInterval,
   }) async {
-    final ViewState view = ref.read(viewControllerProvider);
-    final bool inApp = view.mode == ViewMode.app;
-    final int? viewedListId = _listIdOf(view);
-    // Only the *display* is gated on the current view; the pending row is
-    // tracked regardless so no fetch can lose it (it re-merges whenever the
-    // view would show it).
-    final bool visibleHere =
-        inApp &&
-        _query.trim().isEmpty &&
-        _status != StatusFilter.done &&
-        (viewedListId == null || viewedListId == listId);
-    final List<TaskItem>? rows = state.value;
-    final int placeholderId = --_placeholderSeq;
-    // Begin the mutation BEFORE the optimistic insert.
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
     bus.begin();
-    final DateTime now = DateTime.now().toUtc();
-    final TaskItem placeholder = TaskItem(
-      id: placeholderId,
-      listId: listId,
-      title: title,
-      notes: notes,
-      priority: priority,
-      dueDate: dueDate,
-      quantity: quantity,
-      position: -1,
-      done: false,
-      recurrence: recurrence,
-      recurrenceInterval: recurrenceInterval,
-      createdAt: now,
-      updatedAt: now,
-    );
-    // Single source of truth: the pending map. The displayed list is ALWAYS
-    // derived through _withPendingCreates, so this row is structurally
-    // present until the POST resolves or errors — no fetch can drop it.
-    _pendingCreates[placeholderId] = placeholder;
-    if (visibleHere && rows != null) {
-      _setData(<TaskItem>[placeholder, ...rows]);
-    } else if (rows != null) {
-      _setData(rows);
-    }
-    traceLog.log('create START id=$placeholderId title=$title list=$listId visible=$visibleHere rows=${state.value?.length}');
+    _lastMutationEnd = null;
     var ok = false;
     try {
-      final TaskItem created = await ref
+      await ref
           .read(taskflowRepositoryProvider)
           .createItem(
             listId: listId,
@@ -212,49 +167,20 @@ class ItemsController extends _$ItemsController {
             recurrenceInterval: recurrenceInterval,
           );
       ok = true;
-      _pendingCreates.remove(placeholderId);
-      traceLog.log('create DONE id=$placeholderId -> server ${created.id}');
-      if (ref.mounted && state.value != null) {
-        // Swap the placeholder for the server row, keeping its screen slot.
-        // _setData re-merges (map now empty) — the server row is already in
-        // the passed list, so this is the canonical committed view.
-        _setData(state.value!
-            .map((TaskItem r) => r.id == placeholderId ? created : r)
-            .toList());
-      }
     } on Exception {
-      _pendingCreates.remove(placeholderId);
-      traceLog.log('create FAIL id=$placeholderId');
-      if (ref.mounted && state.value != null) {
-        // Rollback: drop the placeholder from the display (map is empty so
-        // the merge re-adds nothing).
-        _setData(state.value!
-            .where((TaskItem r) => r.id != placeholderId)
-            .toList());
-      }
       rethrow;
     } finally {
       bus.end();
       _lastMutationEnd = DateTime.now();
       if (ref.mounted && ok) {
-        unawaited(_settleCreate());
+        // One authoritative refresh (items + list counts) — awaited so the
+        // row is actually committed server-side, keeping the UI honest.
+        await Future.wait<void>(<Future<void>>[
+          _refreshSilently(),
+          _refreshListsSilently(),
+        ]);
       }
     }
-  }
-
-  /// Reconcile after an optimistic create without racing an in-flight poll:
-  /// retry past `_fetchInFlight` and refresh list counts too.
-  Future<void> _settleCreate() async {
-    const int maxTries = 5;
-    for (int attempt = 0; attempt < maxTries; attempt++) {
-      if (!ref.mounted) return;
-      if (!_fetchInFlight) break;
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-    }
-    await Future.wait<void>(<Future<void>>[
-      _refreshSilently(),
-      _refreshListsSilently(),
-    ]);
   }
 
   /// Non-optimistic full-field update (DESIGN.md §5.3). The draft carries
@@ -449,7 +375,7 @@ class ItemsController extends _$ItemsController {
           .fetchItems(listId: listId, status: status, q: q);
       traceLog.log('buildFetched ${items.length}');
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
-        return _withPendingCreates(items, listId, status, q);
+        return items;
       }
       traceLog.log('buildFetch DISCARDED gen/ctx');
       return state.value ?? const <TaskItem>[];
@@ -482,7 +408,7 @@ class ItemsController extends _$ItemsController {
           .fetchItems(listId: listId, status: status, q: q);
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
         traceLog.log('fetch OK ${items.length} (gen ok)');
-        _setData(_withPendingCreates(items, listId, status, q));
+        _setData(items);
       } else {
         traceLog.log('fetch DISCARDED ${items.length} (gen/ctx changed)');
       }
@@ -505,65 +431,17 @@ class ItemsController extends _$ItemsController {
     return listId != _listIdOf(view);
   }
 
-  /// Merges in-flight create placeholders into a fetch result so no fetch can
-  /// momentarily drop an uncommitted row. A placeholder belongs when the
-  /// fetch's context (list/status/query) would show it; duplicates of the
-  /// server row are skipped once the POST commits (the map is emptied then).
-  List<TaskItem> _withPendingCreates(
-    List<TaskItem> items,
-    int? listId,
-    StatusFilter status,
-    String q,
-  ) {
-    if (_pendingCreates.isEmpty) return items;
-    final List<TaskItem> result = <TaskItem>[...items];
-    for (final MapEntry<int, TaskItem> e in _pendingCreates.entries) {
-      final TaskItem p = e.value;
-      final bool sameList = listId == null || listId == p.listId;
-      final bool notFiltered =
-          status != StatusFilter.done && q.trim().isEmpty;
-      if (!sameList || !notFiltered) continue;
-      // Skip if the row already appeared (e.g. the swap wrote the server row
-      // into the passed list before the map cleared, or a fetch already
-      // returned it) — never duplicate.
-      if (result.any((TaskItem r) => r.id == p.id)) continue;
-      if (result.any((TaskItem r) => r.listId == p.listId &&
-          !r.done &&
-          r.id != p.id &&
-          r.position < p.position)) {
-        // Keep canonical pending ordering (new-on-top): insert before the
-        // first pending item.
-        final int idx = result.indexWhere(
-            (TaskItem r) => !r.done && r.listId == p.listId);
-        result.insert(idx < 0 ? 0 : idx, p);
-      } else {
-        result.insert(0, p);
-      }
-    }
-    return result;
-  }
-
-  /// The single funnel for every state write: the displayed list is ALWAYS
-  /// server rows ∪ in-flight create placeholders. Optimistic rows live only
-  /// in [_pendingCreates]; no fetch or mutation path can write them away
-  /// because the merge is re-applied here on every write. The swap/rollback
-  /// callers pass the post-resolve list and clear the map first, so the
-  /// placeholder naturally disappears exactly then.
+  /// Plain state write. No optimistic-create merging (create is
+  /// non-optimistic — the row only ever exists in fetched data, so nothing
+  /// can make it "blink").
   void _setData(List<TaskItem> items) {
-    final ViewState view = ref.read(viewControllerProvider);
-    final List<TaskItem> merged = _withPendingCreates(
-      items,
-      _listIdOf(view),
-      _status,
-      _query,
-    );
     final List<TaskItem>? current = state.value;
-    if (current != null && sameItems(current, merged)) {
-      traceLog.log('setData no-op (${merged.length})');
+    if (current != null && sameItems(current, items)) {
+      traceLog.log('setData no-op (${items.length})');
       return;
     }
-    traceLog.log('setData ${current?.length}->${merged.length} pending=${_pendingCreates.length}');
-    state = AsyncData<List<TaskItem>>(merged);
+    traceLog.log('setData ${current?.length}->${items.length}');
+    state = AsyncData<List<TaskItem>>(items);
   }
 
   /// How long after a mutation ends to suppress poll ticks. A poll that starts

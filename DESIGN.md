@@ -160,16 +160,17 @@ also → All. Share boot: if current URL (path `/share/<token>` or fragment
 - Share mode: `GET /api/shared/{token}` returns **all** items (no status/q params exist) → filter `status`/`q` **client-side** over `share.items`, exactly like JS `shareFilteredItems()`.
 - Initial load and every manual refresh: `Promise`-style parallel fetch of lists + items; `loading=true` only on first load / view switch (skeleton rows), never on background polls.
 
-### 5.2 Polling (5s) that never clobbers optimistic state
+### 5.2 Polling (5s) that never clobbers mutation state
 
-`Timer.periodic(5s)` tick → **skip** when ANY of: a fetch already in flight; page not visible (`WidgetsBindingObserver.didChangeAppLifecycleState` — Flutter web reports `hidden` for backgrounded tabs; fire one immediate tick on return to `resumed`); `dialogOpen` (any modal/sheet/dialog open); `rearrangeActive`; `mutating > 0` (an optimistic mutation is in flight); `pointerDown` (a drag/scroll gesture is active — a rebuild would kill an in-progress drag).
+`Timer.periodic(5s)` tick → **skip** when ANY of: a fetch already in flight; page not visible (`WidgetsBindingObserver.didChangeAppLifecycleState` — Flutter web reports `hidden` for backgrounded tabs; fire one immediate tick on return to `resumed`); `dialogOpen` (any modal/sheet/dialog open); `rearrangeActive`; `mutating > 0` (a mutation is in flight); `pointerDown` (a drag/scroll gesture is active — a rebuild would kill an in-progress drag); and an additional `_mutationGrace` window of **1.2s after any mutation ends** — a poll started during/just after a write can carry a SQLite pre-commit read-snapshot (the connection's snapshot predates the commit) and clobber the committed state; the mutation's own settle refresh is the authority in that window.
 
-Staleness guard: each fetch captures `_gen`; mutations increment `_gen` when they start. A poll/refresh response is **discarded** if `_gen` changed while it was in flight (a mutation started mid-fetch — its optimistic state must win until its own settle-refresh). On settle of every mutation → one authoritative silent refresh (live-sync latency ≤ mutation duration + one RTT, not 5s).
+Staleness guard: each fetch captures `_gen`; mutations increment `_gen` when they start **and when they end**. A poll/refresh response is **discarded** if `_gen` changed while it was in flight (a mutation started mid-fetch — its state must win until its own settle-refresh; or a mutation ended — the poll may be carrying a pre-commit snapshot). On settle of every mutation → one authoritative silent refresh (live-sync latency ≤ mutation duration + one RTT, not 5s).
 
 ### 5.3 Mutations
 
-- **Toggle done (the only optimistic op):** flip `done` locally + rebuild display order, disable that row's checkbox, `mutating++`, `_gen++`. On response: replace item from `envelope.item`; if `envelope.spawned != null`, insert it at the **top of the pending block** and toast `Repeats <formatted due>`; silent refresh. On error: revert the flip, toast `detail`, silent refresh.
-- **Create / edit / delete / rename list / delete list / share ops:** no optimism — await + silent refresh (progress state on the submit button). Matches the JS client.
+- **Toggle done (the only optimistic op):** flip `done` locally + rebuild display order, disable that row's checkbox, `mutating++`, `_gen++` (begin). On response: replace item from `envelope.item`; if `envelope.spawned != null`, insert it at the **top of the pending block** and toast `Repeats <formatted due>`; silent refresh. On error: revert the flip, toast `detail`, silent refresh. (`_gen++` on end too.)
+- **Create (quick-add):** **non-optimistic by design.** The composer clears its field instantly on submit (rapid-entry feel); `createItem` awaits the POST then performs **one** authoritative silent refresh (items + list counts) so the new row appears at server new-on-top position within ~1 RTT. No client-side placeholder is ever inserted, so **no poll, lifecycle rebuild, or pre-commit snapshot can make the row flash out of existence** — the async-creation race class is eliminated by construction. The chosen tradeoff (row ~50-300ms later than a hypothetical optimistic insert) buys a correctly-simple data flow with zero merge machinery.
+- **Edit / delete / rename list / delete list / share ops:** no optimism — await + silent refresh (progress state on the submit button). Matches the JS client.
 - All mutations go through the right path: shared view ⇒ `/api/shared/{token}/...` (no `list_id` in bodies); app ⇒ `/api/items` etc.
 
 ## 6. File layout (skill: core/data/domain/presentation + feature modules)
@@ -190,17 +191,24 @@ lib/data/repositories/taskflow_repository.dart   wraps ApiClient: typed methods 
 lib/data/services/api_client.dart    ApiClient + ApiException + whitelist body builders
 lib/presentation/providers/*.dart    Riverpod providers: api_client, theme, lists, items,
                               view_controller, share_controller, mutation_bus, router
-lib/presentation/common/*.dart  shared widgets (empty states, skeleton, confirm dialog)
-lib/presentation/features/home/home_shell.dart   responsive Scaffold: NavigationRail (≥1000px)
-                              / AppBar+NavigationDrawer; FAB → item sheet
-lib/presentation/features/home/app_view.dart     All/List view: header, filter bar, list
+lib/presentation/common/*.dart  shared widgets (empty states, skeleton, confirm dialog, trace overlay)
+lib/presentation/features/home/home_shell.dart   responsive Scaffold: rail (≥1000px)
+                              / AppBar+Drawer; quick-add composer is the primary add (no FAB)
+lib/presentation/features/home/app_view.dart     All/List view: header, filter bar, list,
+                              pinned QuickAddBar (submits to ItemsController.createItem)
 lib/presentation/features/share/share_view.dart  share header, read-only UI when permission=read
 lib/presentation/features/items/item_edit_sheet.dart  create/edit dialog (title, notes, date,
                               priority, quantity, recurrence + interval, list picker in All view)
 lib/presentation/features/home/widgets/list_sidebar.dart   nav: All tasks + lists + New list
-lib/presentation/features/home/widgets/item_row.dart      checkbox/title/chips/arrows
+lib/presentation/features/home/widgets/item_row.dart      checkbox/title/chips/trailing drag handle
+lib/presentation/features/home/widgets/item_list_view.dart  hairline-divided reorderable list;
+                              drag handle (immediate) + hold-to-drag; optional ScrollController
+lib/presentation/features/home/widgets/quick_add_bar.dart  inline composer: title field + send,
+                              list picker in All view, busy spinner, error toast; field never
+                              disabled so the keyboard stays up; scrolls list to top on add
 lib/presentation/features/home/widgets/filter_bar.dart    SegmentedButton + search (debounced)
 lib/presentation/features/share/share_dialog.dart         create/revoke share
+lib/core/trace_log.dart, lib/presentation/common/trace_overlay.dart  debug-only (TRACE_ADD define)
 test/models_test.dart         fromJson: timestamps w/ 'Z'+micros, null dates, qty int/float, unknown keys
 test/api_client_test.dart     MockClient: envelopes per §2.2, 204-no-body, ApiException detail mapping
 test/state_test.dart          reorder ordinal math, done-boundary clamp, poll merge staleness, share filter
@@ -219,26 +227,25 @@ ProviderScope
       └─ body
          ├─ AppView (Column)
          │   ├─ view header: 'All tasks'/'<list>' + counts · filter SegmentedButton
-         │   │   · actions: rename/share/delete (list view) · reorder-mode toggle
+         │   │   · actions: rename/share/delete (list view)
          │   ├─ Expanded: loading ? skeleton
          │   │   : items.isEmpty ? EmptyState : ReorderableListView.builder
-         │   │        (item ⇒ ItemRow(key: ValueKey(id), onTap→edit sheet))
-         │   └─ (FAB in shell, hidden in share/read-only) → ItemEditSheet
+         │   │        (item ⇒ ItemRow(key: ValueKey(id), onTap→edit sheet), hairline dividers)
+         │   └─ QuickAddBar (pinned, never a modal — rapid entry)
          └─ ShareView (Column)
              ├─ identity header: list name + 'Read-only'/'Can edit' badge + Open Taskflow
              ├─ filter SegmentedButton + search (client-side)
-             └─ list as above; read-only ⇒ rows w/o arrows/drag, no FAB, no long-press drag
+             └─ list as above; read-only ⇒ rows without drag handles, no long-press drag
 ```
 
-ReorderableListView details: `buildDefaultDragHandles: false`; every row wrapped in `ReorderableDelayedDragStartListener(index: i, child: ItemRow(...))` (hold ~500ms starts drag; short tap still opens edit); rows also expose up/down arrows (compact 2-icon trailing column) — visible whenever reorder is permitted (list view in app mode; shared view with `permission=edit`), hidden in All view, read-only shares, and while `query != ''`.
+ReorderableListView details: `buildDefaultDragHandles: false`; every row wrapped in `ReorderableDelayedDragStartListener(index: i, child: ItemRow(...))` (hold ~500ms starts drag; short tap still opens edit), with a **trailing six-dot drag handle** (`ReorderableDragStartListener`, immediate drag, `Icons.drag_indicator`) — present whenever reorder is permitted (list view in app mode; shared view with `permission=edit`), absent in All view, read-only shares, and while `query != ''`. Rows are separated by hairline dividers (indented under the checkbox, none after the last row).
 
-## 8. Reorder mapping (arrows + drag → server ordinals)
+## 8. Reorder mapping (drag → server ordinals)
 
 **Permitted only when** `(mode==app && view==list) || (mode==share && share.canEdit)`, and `query == ''` (search hides rows, so visible ordinals ≠ server group ordinals — the JS client misses this guard; it is a deliberate fix here, not parity). Status filter pending/done is fine (whole visible list == one group). **Never in All view** (cross-list position is meaningless).
 
 Because server order is authoritative and client order is always the server array order, the visible list == the server's `(position,id)` order of every **visible** group row. With `query==''` every group row is visible, so:
 
-- **Arrow up/down:** find item's index `i` within its own done-group in the display list; `i==0` (up) or `i==last` (down) ⇒ no-op; else optimistic local swap within the group, then `PATCH {'move': 'up'|'down'}`. Server swaps with the adjacent same-group neighbor — identical result. Response envelope ignored; silent refresh reconciles (swapped neighbor included).
 - **Drag (ReorderableListView `onReorder(oldIndex, newIndex)`):** `newIndex > oldIndex ⇒ newIndex--` (post-removal index). Let `g` = display rows with `done == dragged.done` (in order), `oldOrd = indexOf(dragged)` in `g`. Target ordinal `k` = number of g-rows that precede position `newIndex` in the post-removal list; clamp `k` to `[0, g.length-1]`. If `k == oldOrd` ⇒ nothing to do (still silent-refresh). Else: optimistically rebuild `g` (remove at `oldOrd`, insert at `k`) and setState (other group unchanged), then `PATCH {'move_to': k}`; on error roll back the saved snapshot; always finish with a silent refresh (server truth — it also re-bumps positions and may clamp differently).
 - **Done-group boundary rule (filter=all):** dragging a pending row down into the done block clamps `k` to the last pending ordinal; the on-drop rebuild snaps it back under the last pending row (the row may momentarily animate into done territory — ReorderableListView has no drop veto; the synchronous rebuild + refresh corrects it in the same frame cycle). Cross-group moves are impossible server-side (`move_to` is same-group only) — the clamp guarantees the PATCH never crosses. Same for done rows dragged up.
 - Poll is suppressed during the gesture and the PATCH (`pointerDown`, `mutating>0`), so no rebuild can kill a drag or clobber the optimistic order.
