@@ -3,7 +3,12 @@ name: Build Android APK
 on:
   push:
     branches: [main]
-  workflow_dispatch:   # allow manual trigger from the Actions tab
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'API base URL baked into the APK (e.g. http://192.168.1.110:8000)'
+        required: true
+        default: 'http://192.168.1.110:8000'
 
 jobs:
   build-apk:
@@ -27,7 +32,7 @@ jobs:
         run: flutter test
 
       - name: Build APK (debug)
-        run: flutter build apk --debug
+        run: flutter build apk --debug --dart-define=API_BASE_URL=${{ inputs.api_base_url || 'http://192.168.1.110:8000' }}
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
