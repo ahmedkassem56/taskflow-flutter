@@ -156,9 +156,9 @@ class ItemsController extends _$ItemsController {
     final ViewState view = ref.read(viewControllerProvider);
     final bool inApp = view.mode == ViewMode.app;
     final int? viewedListId = _listIdOf(view);
-    // Only optimistically show the row when it belongs in the current view
-    // (Done-filtered / active search would hide it — the settle refresh
-    // handles those, and _quickAdd hops to All when the Done filter hides it).
+    // Only the *display* is gated on the current view; the pending row is
+    // tracked regardless so no fetch can lose it (it re-merges whenever the
+    // view would show it).
     final bool visibleHere =
         inApp &&
         _query.trim().isEmpty &&
@@ -166,39 +166,33 @@ class ItemsController extends _$ItemsController {
         (viewedListId == null || viewedListId == listId);
     final List<TaskItem>? rows = state.value;
     final int placeholderId = --_placeholderSeq;
-    // Begin the mutation BEFORE the optimistic insert: bus.begin() bumps the
-    // mutation generation, so any poll GET that started earlier (old gen) is
-    // discarded by _contextChanged and cannot clobber the optimistic row —
-    // that race made the row vanish and reappear on the next poll.
+    // Begin the mutation BEFORE the optimistic insert.
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
     bus.begin();
-    if (rows != null) {
-      final DateTime now = DateTime.now().toUtc();
-      final TaskItem placeholder = TaskItem(
-        id: placeholderId,
-        listId: listId,
-        title: title,
-        notes: notes,
-        priority: priority,
-        dueDate: dueDate,
-        quantity: quantity,
-        position: -1,
-        done: false,
-        recurrence: recurrence,
-        recurrenceInterval: recurrenceInterval,
-        createdAt: now,
-        updatedAt: now,
-      );
-      if (visibleHere) {
-        // Displayed immediately at the top of the pending block.
-        _setData(<TaskItem>[placeholder, ...rows]);
-      } else {
-        // Not shown in the current view (Done filter / search / other list)
-        // but still tracked so a mid-POST fetch can't lose it; the settle
-        // reconcile surfaces it once the view shows it.
-        _pendingCreates[placeholderId] = placeholder;
-        _setData(rows);
-      }
+    final DateTime now = DateTime.now().toUtc();
+    final TaskItem placeholder = TaskItem(
+      id: placeholderId,
+      listId: listId,
+      title: title,
+      notes: notes,
+      priority: priority,
+      dueDate: dueDate,
+      quantity: quantity,
+      position: -1,
+      done: false,
+      recurrence: recurrence,
+      recurrenceInterval: recurrenceInterval,
+      createdAt: now,
+      updatedAt: now,
+    );
+    // Single source of truth: the pending map. The displayed list is ALWAYS
+    // derived through _withPendingCreates, so this row is structurally
+    // present until the POST resolves or errors — no fetch can drop it.
+    _pendingCreates[placeholderId] = placeholder;
+    if (visibleHere && rows != null) {
+      _setData(<TaskItem>[placeholder, ...rows]);
+    } else if (rows != null) {
+      _setData(rows);
     }
     var ok = false;
     try {
@@ -218,6 +212,8 @@ class ItemsController extends _$ItemsController {
       _pendingCreates.remove(placeholderId);
       if (ref.mounted && state.value != null) {
         // Swap the placeholder for the server row, keeping its screen slot.
+        // _setData re-merges (map now empty) — the server row is already in
+        // the passed list, so this is the canonical committed view.
         _setData(state.value!
             .map((TaskItem r) => r.id == placeholderId ? created : r)
             .toList());
@@ -225,6 +221,8 @@ class ItemsController extends _$ItemsController {
     } on Exception {
       _pendingCreates.remove(placeholderId);
       if (ref.mounted && state.value != null) {
+        // Rollback: drop the placeholder from the display (map is empty so
+        // the merge re-adds nothing).
         _setData(state.value!
             .where((TaskItem r) => r.id != placeholderId)
             .toList());
@@ -233,11 +231,6 @@ class ItemsController extends _$ItemsController {
     } finally {
       bus.end();
       if (ref.mounted && ok) {
-        // Housekeeping reconcile — deliberately not awaited so the composer
-        // clears and refocuses as soon as the POST lands. Note: with the
-        // mutation generation bumped by begin(), _fetchInFlight is *not*
-        // shared state — a poll in flight carries the old gen and will be
-        // discarded; this fresh reconcile fetches the committed row.
         unawaited(_settleCreate());
       }
     }
@@ -519,19 +512,42 @@ class ItemsController extends _$ItemsController {
       final bool notFiltered =
           status != StatusFilter.done && q.trim().isEmpty;
       if (!sameList || !notFiltered) continue;
-      final bool serverHasIt =
-          result.any((TaskItem r) => r.id == p.id);
-      if (!serverHasIt) {
+      // Skip if the row already appeared (e.g. the swap wrote the server row
+      // into the passed list before the map cleared, or a fetch already
+      // returned it) — never duplicate.
+      if (result.any((TaskItem r) => r.id == p.id)) continue;
+      if (result.any((TaskItem r) => r.listId == p.listId &&
+          !r.done &&
+          r.id != p.id &&
+          r.position < p.position)) {
+        // Keep canonical pending ordering (new-on-top): insert before the
+        // first pending item.
+        final int idx = result.indexWhere(
+            (TaskItem r) => !r.done && r.listId == p.listId);
+        result.insert(idx < 0 ? 0 : idx, p);
+      } else {
         result.insert(0, p);
       }
     }
     return result;
   }
 
+  /// The single funnel for every state write: the displayed list is ALWAYS
+  /// server rows ∪ in-flight create placeholders. Optimistic rows live only
+  /// in [_pendingCreates]; no fetch or mutation path can write them away
+  /// because the merge is re-applied here on every write. The swap/rollback
+  /// callers pass the post-resolve list and clear the map first, so the
+  /// placeholder naturally disappears exactly then.
   void _setData(List<TaskItem> items) {
+    final List<TaskItem> merged = _withPendingCreates(
+      items,
+      _listIdOf(ref.read(viewControllerProvider)),
+      _status,
+      _query,
+    );
     final List<TaskItem>? current = state.value;
-    if (current != null && sameItems(current, items)) return;
-    state = AsyncData<List<TaskItem>>(items);
+    if (current != null && sameItems(current, merged)) return;
+    state = AsyncData<List<TaskItem>>(merged);
   }
 
   void _pollTick() {
