@@ -144,15 +144,19 @@ class FakeBackend {
     if (method == 'POST' && path == '/api/items') {
       final Map<String, dynamic> body = jsonDecode(request.body) as Map<String, dynamic>;
       final int listId = body['list_id'] as int;
-      final int maxPos = items
-          .where((Map<String, dynamic> i) => i['list_id'] == listId)
-          .fold<int>(0, (int m, Map<String, dynamic> i) => ((i['position'] as num) + 1) > m ? (i['position'] as int) + 1 : m);
+      // Server semantics (§1.3): a new pending task goes ON TOP of the
+      // pending group (position 0); existing pending siblings shift down.
+      for (final Map<String, dynamic> other in items) {
+        if (other['list_id'] == listId && other['done'] == false) {
+          other['position'] = (other['position'] as num) + 1;
+        }
+      }
       final Map<String, dynamic> item = _itemJson(
         id: _nextItemId++,
         listId: listId,
         title: body['title'] as String,
         done: false,
-        position: maxPos,
+        position: 0,
       );
       items.add(item);
       final Map<String, dynamic> list = lists.firstWhere((Map<String, dynamic> l) => l['id'] == listId);

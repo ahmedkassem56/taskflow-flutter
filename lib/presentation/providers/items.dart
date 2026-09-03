@@ -38,6 +38,7 @@ class ItemsController extends _$ItemsController {
   bool _fetchInFlight = false;
   StatusFilter _status = StatusFilter.all;
   String _query = '';
+  int _placeholderSeq = 0;
 
   @override
   Future<List<TaskItem>> build() async {
@@ -130,8 +131,12 @@ class ItemsController extends _$ItemsController {
     }
   }
 
-  /// Non-optimistic create (DESIGN.md §5.3): await, then silent refresh of
-  /// items + list counts.
+  /// Optimistic create (quick-add): the new pending row is inserted at the
+  /// top of the pending block immediately (server semantics: new-on-top), the
+  /// POST runs, then the placeholder is swapped for the server row. The
+  /// settle refresh of items + list counts runs in the background — the UI
+  /// must not wait for it (that serial wait made quick-add feel 1-2 s slow).
+  /// On error the placeholder is rolled back and the error rethrown.
   Future<void> createItem({
     required int listId,
     required String title,
@@ -142,11 +147,47 @@ class ItemsController extends _$ItemsController {
     required Recurrence recurrence,
     int? recurrenceInterval,
   }) async {
+    final ViewState view = ref.read(viewControllerProvider);
+    final bool inApp = view.mode == ViewMode.app;
+    final int? viewedListId = _listIdOf(view);
+    // Only optimistically show the row when it belongs in the current view
+    // (Done-filtered / active search would hide it — the settle refresh
+    // handles those, and _quickAdd hops to All when the Done filter hides it).
+    final bool visibleHere =
+        inApp &&
+        _query.trim().isEmpty &&
+        _status != StatusFilter.done &&
+        (viewedListId == null || viewedListId == listId);
+    final List<TaskItem>? rows = state.value;
+    final int placeholderId = --_placeholderSeq;
+    if (visibleHere && rows != null) {
+      final DateTime now = DateTime.now().toUtc();
+      _setData(<TaskItem>[
+        TaskItem(
+          id: placeholderId,
+          listId: listId,
+          title: title,
+          notes: notes,
+          priority: priority,
+          dueDate: dueDate,
+          quantity: quantity,
+          position: -1,
+          done: false,
+          recurrence: recurrence,
+          recurrenceInterval: recurrenceInterval,
+          createdAt: now,
+          updatedAt: now,
+        ),
+        ...rows,
+      ]);
+    }
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
     bus.begin();
     var ok = false;
     try {
-      await ref.read(taskflowRepositoryProvider).createItem(
+      final TaskItem created = await ref
+          .read(taskflowRepositoryProvider)
+          .createItem(
             listId: listId,
             title: title,
             notes: notes,
@@ -157,13 +198,28 @@ class ItemsController extends _$ItemsController {
             recurrenceInterval: recurrenceInterval,
           );
       ok = true;
+      if (ref.mounted && state.value != null) {
+        // Swap the placeholder for the server row, keeping its screen slot.
+        _setData(state.value!
+            .map((TaskItem r) => r.id == placeholderId ? created : r)
+            .toList());
+      }
+    } on Exception {
+      if (ref.mounted && state.value != null) {
+        _setData(state.value!
+            .where((TaskItem r) => r.id != placeholderId)
+            .toList());
+      }
+      rethrow;
     } finally {
       bus.end();
       if (ref.mounted && ok) {
-        await Future.wait<void>(<Future<void>>[
+        // Housekeeping reconcile — deliberately not awaited so the composer
+        // clears and refocuses as soon as the POST lands.
+        unawaited(Future.wait<void>(<Future<void>>[
           _refreshSilently(),
           _refreshListsSilently(),
-        ]);
+        ]));
       }
     }
   }

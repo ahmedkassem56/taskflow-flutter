@@ -61,6 +61,18 @@ class _QuickAddBarState extends State<QuickAddBar> {
     if (_busy || !widget.enabled) return;
     final String title = _controller.text.trim();
     if (title.isEmpty) return;
+    // Keep the keyboard open across the send action. Some IMEs dismiss on
+    // "send"; re-asserting focus synchronously (and again next frame) makes
+    // any dismissal instantly reopen instead of leaving the keyboard down
+    // until the async add finishes.
+    if (!_focusNode.hasFocus) {
+      _focusNode.requestFocus();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (mounted && !_focusNode.hasFocus) {
+        _focusNode.requestFocus();
+      }
+    });
     setState(() => _busy = true);
     String? error;
     try {
@@ -77,14 +89,10 @@ class _QuickAddBarState extends State<QuickAddBar> {
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(error)));
     }
-    // The field is never disabled, so focus (and the mobile keyboard) is
-    // retained through the whole add. Re-assert focus next frame as cheap
-    // insurance against IMEs that dismiss on the send action.
-    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      if (mounted && !_focusNode.hasFocus) {
-        _focusNode.requestFocus();
-      }
-    });
+    // Re-assert focus after the add settles as insurance.
+    if (!_focusNode.hasFocus) {
+      _focusNode.requestFocus();
+    }
   }
 
   @override
