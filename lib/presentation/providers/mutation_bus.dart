@@ -28,9 +28,17 @@ class MutationBus extends _$MutationBus {
     state = state + 1;
   }
 
-  /// Marks a mutation end (never below zero).
+  /// Marks a mutation end (never below zero). Also bumps the generation so a
+  /// fetch that started *after* the mutation (e.g. the next 5s poll) sees a
+  /// changed gen at completion and discards itself — otherwise it could apply
+  /// stale pre-commit data right after the create's settle (the cause of the
+  /// Android add blink: create DONE at 15900, stale poll 'fetch OK 73' at
+  /// 15920 clobbered 74->73).
   void end() {
-    if (state > 0) state = state - 1;
+    if (state > 0) {
+      _gen++;
+      state = state - 1;
+    }
   }
 
   /// Bumps the generation without starting a mutation (used on view switches
