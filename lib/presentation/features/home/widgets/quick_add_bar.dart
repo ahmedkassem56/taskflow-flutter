@@ -74,6 +74,10 @@ class _QuickAddBarState extends State<QuickAddBar> {
       }
     });
     setState(() => _busy = true);
+    // Clear INSTANTLY — rapid entry must never wait on the round-trip. The
+    // row appears when the POST confirms (~one RTT). On failure the text is
+    // restored so nothing is lost.
+    _controller.clear();
     String? error;
     try {
       error = await widget.onSubmit(title);
@@ -82,9 +86,10 @@ class _QuickAddBarState extends State<QuickAddBar> {
     }
     if (!mounted) return;
     setState(() => _busy = false);
-    if (error == null) {
-      _controller.clear();
-    } else {
+    if (error != null) {
+      if (_controller.text.isEmpty) {
+        _controller.text = title;
+      }
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(error)));

@@ -10,6 +10,7 @@ import '../models/shared_list.dart';
 import '../models/share_link.dart';
 import '../models/task_item.dart';
 import '../models/task_list.dart';
+import 'client_stub.dart' if (dart.library.io) 'client_io.dart';
 
 /// Error surfaced to the UI for every failed request (DESIGN.md §4).
 ///
@@ -37,7 +38,7 @@ const String apiUnreachableMessage = 'Cannot reach the server. Check your connec
 /// injectable (`http/testing` MockClient in tests).
 class ApiClient {
   ApiClient(String baseUrl, {http.Client? client})
-      : _client = client ?? http.Client(),
+      : _client = client ?? createPlatformClient(),
         _baseUrl = baseUrl.endsWith('/')
             ? baseUrl.substring(0, baseUrl.length - 1)
             : baseUrl;

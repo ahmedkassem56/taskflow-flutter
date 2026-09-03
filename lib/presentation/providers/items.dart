@@ -150,13 +150,18 @@ class ItemsController extends _$ItemsController {
     int? recurrenceInterval,
   }) async {
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
+    // Context at submit time — the insert after the POST only applies if the
+    // user is still looking at this same list/filter/query.
+    final ViewState view = ref.read(viewControllerProvider);
+    final int? ctxListId = _listIdOf(view);
+    final StatusFilter ctxStatus = _status;
+    final String ctxQ = _query;
     _lastMutationEnd = null;
-    // Force-start BEFORE the POST so the request is truly concurrent with
-    // everything else, and bump the gen AFTER the POST lands so the refresh
-    // (which follows) is guaranteed to apply.
     bus.begin();
+    traceLog.log('create START list=$listId "$title"');
+    TaskItem created;
     try {
-      await ref
+      created = await ref
           .read(taskflowRepositoryProvider)
           .createItem(
             listId: listId,
@@ -168,19 +173,34 @@ class ItemsController extends _$ItemsController {
             recurrence: recurrence,
             recurrenceInterval: recurrenceInterval,
           );
+      traceLog.log('create OK id=${created.id} "${created.title}"');
     } finally {
       bus.end();
+      _lastMutationEnd = DateTime.now();
     }
-    _lastMutationEnd = DateTime.now();
     if (!ref.mounted) return;
-    // One authoritative refresh (items + list counts). Must run even if a
-    // background poll is in flight — a create's settle cannot wait for the
-    // next 5s tick (that wait is the "takes a few seconds" bug). The
-    // mutation gen has moved (begin+end), so any in-flight poll is discarded
-    // at completion; this refresh applies the committed row.
-    await _refreshSilently(force: true);
+    // Show the row NOW, straight from the POST's own 201 response — the item
+    // is committed server-side and the server already returned it, so no
+    // second round-trip (reconcile GET) is needed for it to appear. Guards
+    // mirror the fetch staleness rules: insert only when the view context is
+    // unchanged and the item would actually be visible here.
+    if (ctxQ.isEmpty &&
+        ctxStatus != StatusFilter.done &&
+        ctxListId == _listIdOf(ref.read(viewControllerProvider)) &&
+        ctxStatus == _status &&
+        ctxQ == _query) {
+      final List<TaskItem> current = state.value ?? const <TaskItem>[];
+      if (!current.any((TaskItem e) => e.id == created.id)) {
+        traceLog.log('create INSERT id=${created.id} '
+            'rows ${current.length}->${current.length + 1}');
+        _setData(<TaskItem>[created, ...current]);
+      }
+    }
+    // Background reconcile: server truth for counts, position, neighbors —
+    // the row is already visible, so this can never be on the user's path.
+    unawaited(_refreshSilently(force: true));
     if (ref.mounted) {
-      await _refreshListsSilently();
+      unawaited(_refreshListsSilently());
     }
   }
 

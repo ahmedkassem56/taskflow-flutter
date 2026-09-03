@@ -85,14 +85,16 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.send);
     await tester.pump(); // submit
 
-    // Fast-forward. First poll (600ms) resolves mid-create. The create's own
-    // refresh must NOT be skipped and must NOT wait for the next tick.
+    // Fast-forward. The POST resolves and the row is inserted straight from
+    // its 201 response — well before any 5s poll could bring it.
     await tester.pump(const Duration(milliseconds: 50)); // POST resolves
-    await tester.pump(const Duration(milliseconds: 100)); // settle refresh runs
-    await tester.pumpAndSettle(const Duration(milliseconds: 50));
-
-    // THE assertion: Bread visible well before the 5s poll would come around.
+    await tester.pump(); // frame with the inserted row
     expect(row('Bread'), findsOneWidget,
-        reason: 'row must appear promptly after the POST, even with a poll in flight');
+        reason: 'row must appear the moment the POST confirms, even with a slow poll in flight');
+
+    // Drain the slow (600ms) reconcile GETs so no mock timer is pending at
+    // teardown.
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pumpAndSettle();
   });
 }

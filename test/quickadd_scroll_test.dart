@@ -133,18 +133,24 @@ void main() {
     // Quick-add in the scrolled state.
     await tester.enterText(find.byKey(const Key('quick-add-field')), 'NEW ITEM');
     await tester.testTextInput.receiveAction(TextInputAction.send);
-    await tester.pump(); // one frame after submit (optimistic)
+    // NEW contract: the row appears when the POST resolves (~300ms in this
+    // mock), inserted straight from the POST's own 201 response — never
+    // before (no client-side placeholder), never on a later poll.
     await tester.pump(const Duration(milliseconds: 50));
-    // NOTE: the server POST takes 300ms — anything "visible" now is optimistic.
+    expect(find.text('NEW ITEM'), findsNothing,
+        reason: 'no row before the server confirms the create');
+    await tester.pump(const Duration(milliseconds: 300)); // POST resolves
+    // Scroll-to-top animation (started when the POST confirmed) runs to
+    // completion so the new-on-top row is in the viewport.
+    await tester.pumpAndSettle();
     expect(find.text('NEW ITEM'), findsOneWidget,
-        reason: 'optimistic row must be in the widget tree immediately');
+        reason: 'row must appear the moment the POST confirms (from its body)');
     final double newY = tester.getTopLeft(find.text('NEW ITEM')).dy;
     final bool inViewport = newY >= 0 && newY <= 844;
-    debugPrint('optimistic row top-left dy after submit frame: $newY; inViewport=$inViewport');
+    debugPrint('new row top-left dy after POST: $newY; inViewport=$inViewport');
     expect(inViewport, isTrue,
         reason: 'the JUST-ADDED item must be visible where the user can see it, even when scrolled');
-    // Allow the simulated 300ms server latency + reconcile timers to finish
-    // so no Timer is left pending at test teardown.
+    // Allow the simulated timers to finish so none is pending at teardown.
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
