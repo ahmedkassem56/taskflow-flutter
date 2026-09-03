@@ -40,6 +40,15 @@ class ItemsController extends _$ItemsController {
   StatusFilter _status = StatusFilter.all;
   String _query = '';
   DateTime? _lastMutationEnd;
+  /// Ids of items created on THIS controller that must be present in any
+  /// applied fetch. A poll whose read snapshot predates a create's commit
+  /// returns a list WITHOUT the new id — applying it would make the just-added
+  /// row vanish (the trace-proven "appears, disappears, returns at next poll").
+  /// A response containing the id (post-commit snapshot) clears the entry; the
+  /// entry also expires after [_pendingCreateGuardMs] so a create that the
+  /// server later removes can't wedge the list forever.
+  final Map<int, DateTime> _pendingCreateGuards = <int, DateTime>{};
+  static const Duration _pendingCreateGuardMs = Duration(seconds: 8);
 
   @override
   Future<List<TaskItem>> build() async {
@@ -173,7 +182,11 @@ class ItemsController extends _$ItemsController {
             recurrence: recurrence,
             recurrenceInterval: recurrenceInterval,
           );
-      traceLog.log('create OK id=${created.id} "${created.title}"');
+      traceLog.log('create OK id=${created.id} "$title"');
+      // Register the guard BEFORE any subsequent fetch can apply a
+      // pre-commit snapshot that lacks this item.
+      _pendingCreateGuards[created.id] =
+          DateTime.now().add(_pendingCreateGuardMs);
     } finally {
       bus.end();
       _lastMutationEnd = DateTime.now();
@@ -396,7 +409,10 @@ class ItemsController extends _$ItemsController {
           .fetchItems(listId: listId, status: status, q: q);
       traceLog.log('buildFetched ${items.length}');
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
-        return items;
+        final List<TaskItem>? guarded = _dropPreCommitSnapshots(items);
+        if (guarded != null) return items;
+        traceLog.log('buildFetch DISCARDED pre-commit snapshot');
+        return state.value ?? const <TaskItem>[];
       }
       traceLog.log('buildFetch DISCARDED gen/ctx');
       return state.value ?? const <TaskItem>[];
@@ -428,6 +444,13 @@ class ItemsController extends _$ItemsController {
           .read(taskflowRepositoryProvider)
           .fetchItems(listId: listId, status: status, q: q);
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
+        final List<TaskItem>? guarded = _dropPreCommitSnapshots(items);
+        if (guarded == null) {
+          traceLog.log(
+              'fetch DISCARDED ${items.length} (pre-commit snapshot: '
+              'missing just-created item)');
+          return;
+        }
         traceLog.log('fetch OK ${items.length} (gen ok)');
         _setData(items);
       } else {
@@ -442,6 +465,25 @@ class ItemsController extends _$ItemsController {
 
   Future<void> _refreshListsSilently() async {
     await ref.read(listsControllerProvider.notifier).refresh();
+  }
+
+  /// Returns [items] if it is NOT a pre-commit snapshot (it contains every
+  /// still-guarded just-created id, or none are guarded); otherwise returns
+  /// null to signal "discard" (the response predates a create's commit). A
+  /// guarded id that IS present clears its guard (server has committed; future
+  /// snapshots include it).
+  List<TaskItem>? _dropPreCommitSnapshots(List<TaskItem> items) {
+    if (_pendingCreateGuards.isEmpty) return items;
+    final DateTime now = DateTime.now();
+    final Set<int> fetched = items.map((TaskItem e) => e.id).toSet();
+    final List<int> missing = <int>[];
+    _pendingCreateGuards.removeWhere((int id, DateTime expiry) {
+      if (expiry.isBefore(now)) return true; // expired guard
+      if (fetched.contains(id)) return true; // committed — clear
+      missing.add(id);
+      return false;
+    });
+    return missing.isEmpty ? items : null;
   }
 
   bool _contextChanged(int? listId, StatusFilter status, String q, int gen) {
