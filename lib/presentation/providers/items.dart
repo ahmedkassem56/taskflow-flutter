@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../core/trace_log.dart';
 import '../../config.dart';
 import '../../data/models/enums.dart';
 import '../../data/models/item_envelope.dart';
@@ -194,6 +195,7 @@ class ItemsController extends _$ItemsController {
     } else if (rows != null) {
       _setData(rows);
     }
+    traceLog.log('create START id=$placeholderId title=$title list=$listId visible=$visibleHere rows=${state.value?.length}');
     var ok = false;
     try {
       final TaskItem created = await ref
@@ -210,6 +212,7 @@ class ItemsController extends _$ItemsController {
           );
       ok = true;
       _pendingCreates.remove(placeholderId);
+      traceLog.log('create DONE id=$placeholderId -> server ${created.id}');
       if (ref.mounted && state.value != null) {
         // Swap the placeholder for the server row, keeping its screen slot.
         // _setData re-merges (map now empty) — the server row is already in
@@ -220,6 +223,7 @@ class ItemsController extends _$ItemsController {
       }
     } on Exception {
       _pendingCreates.remove(placeholderId);
+      traceLog.log('create FAIL id=$placeholderId');
       if (ref.mounted && state.value != null) {
         // Rollback: drop the placeholder from the display (map is empty so
         // the merge re-adds nothing).
@@ -441,9 +445,11 @@ class ItemsController extends _$ItemsController {
       final List<TaskItem> items = await ref
           .read(taskflowRepositoryProvider)
           .fetchItems(listId: listId, status: status, q: q);
+      traceLog.log('buildFetched ${items.length}');
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
         return _withPendingCreates(items, listId, status, q);
       }
+      traceLog.log('buildFetch DISCARDED gen/ctx');
       return state.value ?? const <TaskItem>[];
     } on Exception catch (error) {
       if (!ref.mounted || _contextChanged(listId, status, q, gen)) {
@@ -473,7 +479,10 @@ class ItemsController extends _$ItemsController {
           .read(taskflowRepositoryProvider)
           .fetchItems(listId: listId, status: status, q: q);
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
+        traceLog.log('fetch OK ${items.length} (gen ok)');
         _setData(_withPendingCreates(items, listId, status, q));
+      } else {
+        traceLog.log('fetch DISCARDED ${items.length} (gen/ctx changed)');
       }
     } on Exception {
       // Silent path: keep the last good snapshot.
@@ -539,14 +548,19 @@ class ItemsController extends _$ItemsController {
   /// callers pass the post-resolve list and clear the map first, so the
   /// placeholder naturally disappears exactly then.
   void _setData(List<TaskItem> items) {
+    final ViewState view = ref.read(viewControllerProvider);
     final List<TaskItem> merged = _withPendingCreates(
       items,
-      _listIdOf(ref.read(viewControllerProvider)),
+      _listIdOf(view),
       _status,
       _query,
     );
     final List<TaskItem>? current = state.value;
-    if (current != null && sameItems(current, merged)) return;
+    if (current != null && sameItems(current, merged)) {
+      traceLog.log('setData no-op (${merged.length})');
+      return;
+    }
+    traceLog.log('setData ${current?.length}->${merged.length} pending=${_pendingCreates.length}');
     state = AsyncData<List<TaskItem>>(merged);
   }
 

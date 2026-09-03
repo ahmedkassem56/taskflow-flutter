@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/theme.dart';
+import '../../common/trace_overlay.dart';
 import 'app_view.dart';
 import 'widgets/list_sidebar.dart';
 
@@ -138,11 +139,17 @@ class HomeShell extends ConsumerWidget {
         return Scaffold(
           appBar: appBar,
           drawer: wide ? null : drawer,
-          body: Row(
+          body: Stack(
             children: <Widget>[
-              ?rail,
-              if (wide) const VerticalDivider(width: 1),
-              const Expanded(child: AppView()),
+              Row(
+                children: <Widget>[
+                  ?rail,
+                  if (wide) const VerticalDivider(width: 1),
+                  const Expanded(child: AppView()),
+                ],
+              ),
+              // Debug trace overlay (only built with TRACE_ADD=true).
+              const TraceOverlay(),
             ],
           ),
         );
