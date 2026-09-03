@@ -21,6 +21,7 @@ class ItemListView extends StatelessWidget {
     this.onTapItem,
     this.listNameOf,
     this.reorderable = false,
+    this.scrollController,
     this.onReorder,
     this.onRearrangeChanged,
     this.checkboxEnabled = true,
@@ -35,6 +36,11 @@ class ItemListView extends StatelessWidget {
   /// Resolves a list id to its display name for the "All tasks" list-name
   /// chip; null hides the chip entirely.
   final String? Function(int listId)? listNameOf;
+
+  /// Optional scroll controller (allows the app view to jump back to the top
+  /// when a quick-add lands while the user is scrolled deep). Both list
+  /// variants attach it (ReorderableListView uses `scrollController`).
+  final ScrollController? scrollController;
 
   /// Enables reorder (drag handle + hold-to-drag). Requires [onReorder].
   final bool reorderable;
@@ -109,12 +115,14 @@ class ItemListView extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!reorderable || onReorder == null) {
       return ListView.builder(
+        controller: scrollController,
         padding: const EdgeInsets.only(bottom: 12),
         itemCount: items.length,
         itemBuilder: (BuildContext context, int index) => _buildRow(context, index),
       );
     }
     return ReorderableListView.builder(
+      scrollController: scrollController,
       padding: const EdgeInsets.only(bottom: 12),
       buildDefaultDragHandles: false,
       itemCount: items.length,

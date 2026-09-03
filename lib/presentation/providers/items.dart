@@ -160,6 +160,12 @@ class ItemsController extends _$ItemsController {
         (viewedListId == null || viewedListId == listId);
     final List<TaskItem>? rows = state.value;
     final int placeholderId = --_placeholderSeq;
+    // Begin the mutation BEFORE the optimistic insert: bus.begin() bumps the
+    // mutation generation, so any poll GET that started earlier (old gen) is
+    // discarded by _contextChanged and cannot clobber the optimistic row —
+    // that race made the row vanish and reappear on the next poll.
+    final MutationBus bus = ref.read(mutationBusProvider.notifier);
+    bus.begin();
     if (visibleHere && rows != null) {
       final DateTime now = DateTime.now().toUtc();
       _setData(<TaskItem>[
@@ -181,8 +187,6 @@ class ItemsController extends _$ItemsController {
         ...rows,
       ]);
     }
-    final MutationBus bus = ref.read(mutationBusProvider.notifier);
-    bus.begin();
     var ok = false;
     try {
       final TaskItem created = await ref
@@ -215,13 +219,28 @@ class ItemsController extends _$ItemsController {
       bus.end();
       if (ref.mounted && ok) {
         // Housekeeping reconcile — deliberately not awaited so the composer
-        // clears and refocuses as soon as the POST lands.
-        unawaited(Future.wait<void>(<Future<void>>[
-          _refreshSilently(),
-          _refreshListsSilently(),
-        ]));
+        // clears and refocuses as soon as the POST lands. Note: with the
+        // mutation generation bumped by begin(), _fetchInFlight is *not*
+        // shared state — a poll in flight carries the old gen and will be
+        // discarded; this fresh reconcile fetches the committed row.
+        unawaited(_settleCreate());
       }
     }
+  }
+
+  /// Reconcile after an optimistic create without racing an in-flight poll:
+  /// retry past `_fetchInFlight` and refresh list counts too.
+  Future<void> _settleCreate() async {
+    const int maxTries = 5;
+    for (int attempt = 0; attempt < maxTries; attempt++) {
+      if (!ref.mounted) return;
+      if (!_fetchInFlight) break;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+    await Future.wait<void>(<Future<void>>[
+      _refreshSilently(),
+      _refreshListsSilently(),
+    ]);
   }
 
   /// Non-optimistic full-field update (DESIGN.md §5.3). The draft carries

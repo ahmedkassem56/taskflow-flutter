@@ -112,6 +112,7 @@ class AppView extends ConsumerStatefulWidget {
 
 class _AppViewState extends ConsumerState<AppView> {
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _listScrollController = ScrollController();
   StatusFilter _status = StatusFilter.all;
   bool _searchActive = false;
 
@@ -121,6 +122,7 @@ class _AppViewState extends ConsumerState<AppView> {
   @override
   void dispose() {
     _searchController.dispose();
+    _listScrollController.dispose();
     super.dispose();
   }
 
@@ -224,6 +226,7 @@ class _AppViewState extends ConsumerState<AppView> {
       onTapItem: (TaskItem item) => openEditItemSheet(context, ref, item),
       listNameOf: isAllTasksView(viewState) ? listNameOf : null,
       reorderable: reorderEnabled,
+      scrollController: _listScrollController,
       onReorder: reorderEnabled ? _reorder : null,
       // ADAPT(ViewController): rearrange flag suppresses polls during drags.
       onRearrangeChanged: (bool active) {
@@ -270,8 +273,22 @@ class _AppViewState extends ConsumerState<AppView> {
   Future<String?> _quickAdd(String title, int listId) async {
     if (listId == 0) return 'Create a list first';
     final String? error = await _saveQuickItem(ref, listId, title);
-    if (error == null && _status == StatusFilter.done) {
-      _onStatusChanged(StatusFilter.all);
+    if (error == null) {
+      if (_status == StatusFilter.done) {
+        _onStatusChanged(StatusFilter.all);
+      }
+      // Scroll the list back to the top so the just-added (new-on-top) row is
+      // visible even when the user was scrolled deep into a long list —
+      // otherwise the optimistic row lands off-screen above the viewport and
+      // the add looks delayed until the reconcile refresh.
+      final double target = _listScrollController.hasClients
+          ? _listScrollController.position.minScrollExtent
+          : 0;
+      _listScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
     }
     return error;
   }
