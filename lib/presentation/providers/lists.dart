@@ -1,5 +1,6 @@
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import '../../core/trace_log.dart';
 import '../../data/models/share_link.dart';
 import '../../data/models/task_list.dart';
 import '../../data/repositories/taskflow_repository.dart';
@@ -62,15 +63,21 @@ class ListsController extends _$ListsController {
     // refresh. Without the local apply, a refresh that fails (e.g. a stale
     // pooled socket on mobile) would leave the OLD name on screen until the
     // app restarts — the "rename only applies after restart" bug.
+    traceLog.log('rename START id=$id name="$name"');
     final TaskList renamed = await _repo.renameList(id, name);
+    traceLog.log('rename OK server -> "${renamed.name}"');
     final List<TaskList> current = state.value ?? const <TaskList>[];
     if (ref.mounted && current.isNotEmpty) {
       state = AsyncData<List<TaskList>>(<TaskList>[
         for (final TaskList l in current)
           if (l.id == id) renamed else l,
       ]);
+      traceLog.log('rename LOCAL-APPLIED (${current.length} lists)');
+    } else {
+      traceLog.log('rename local-apply SKIPPED (state empty/!mounted)');
     }
-    await refresh();
+    final List<TaskList>? fresh = await refresh();
+    traceLog.log('rename refresh -> ${fresh?.length ?? 'FAILED'} lists');
   }
 
   Future<void> deleteList(int id) async {
