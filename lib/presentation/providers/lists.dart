@@ -28,6 +28,16 @@ class ListsController extends _$ListsController {
   /// restart" bug, seen on web AND Android — a pure client race).
   int _gen = 0;
 
+  /// Pending-rename guard (trace-proven on web + Android): a refresh GET that
+  /// starts right after a rename PATCH can carry a SQLite pre-commit snapshot
+  /// — the server committed the rename, but the GET's read saw the OLD name
+  /// (exactly like the item-create snapshot race). The rename's local-apply is
+  /// authoritative; a refresh response that shows a DIFFERENT name for a
+  /// just-renamed list is stale and must be DISCARDED until a response carries
+  /// the new name. Map: listId → the name we set + when it expires.
+  final Map<int, (String, DateTime)> _pendingRename = <int, (String, DateTime)>{};
+  static const Duration _renameGuardWindow = Duration(seconds: 8);
+
   /// True once the first lists fetch succeeded (boot). Item controllers use
   /// this to decide whether a fresh mount should re-sync the lists snapshot.
   bool get initialized => _initialized;
@@ -58,6 +68,30 @@ class ListsController extends _$ListsController {
           await ref.read(taskflowRepositoryProvider).fetchLists();
       if (!ref.mounted || gen != _gen) {
         traceLog.log('lists refresh DISCARDED (stale, started before a newer op)');
+        return null;
+      }
+      // Pending-rename guard: a refresh that shows the OLD name for a
+      // just-renamed list is a pre-commit snapshot — discard it (the local
+      // apply is authoritative). A response carrying the new name clears the
+      // guard; expired guards are dropped.
+      final DateTime now = DateTime.now();
+      final List<int> stale = <int>[];
+      _pendingRename.removeWhere((int id, (String, DateTime) g) {
+        final (String want, DateTime exp) = g;
+        if (exp.isBefore(now)) return true; // expired — stop guarding
+        for (final TaskList l in lists) {
+          if (l.id == id) {
+            if (l.name == want) return true; // new name seen — clear guard
+            stale.add(id);
+            return false;
+          }
+        }
+        return false; // list absent (deleted?) — let it pass through
+      });
+      if (stale.isNotEmpty) {
+        traceLog.log(
+            'lists refresh DISCARDED (pre-commit snapshot: list $stale '
+            'still shows old name)');
         return null;
       }
       state = AsyncData<List<TaskList>>(lists);
@@ -91,6 +125,11 @@ class ListsController extends _$ListsController {
           if (l.id == id) renamed else l,
       ]);
       traceLog.log('rename LOCAL-APPLIED (${current.length} lists)');
+      // Guard this rename: the settle refresh below (or any overlapping
+      // refresh) that still shows the OLD name is a pre-commit snapshot and
+      // must not revert the UI.
+      _pendingRename[id] =
+          (renamed.name, DateTime.now().add(_renameGuardWindow));
     } else {
       traceLog.log('rename local-apply SKIPPED (state empty/!mounted)');
     }

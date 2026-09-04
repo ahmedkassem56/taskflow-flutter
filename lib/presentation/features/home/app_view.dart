@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/trace_log.dart';
 import '../../../data/models/enums.dart';
 import '../../../data/models/task_item.dart';
 import '../../../data/models/task_list.dart';
@@ -328,6 +329,8 @@ class _AppViewState extends ConsumerState<AppView> {
     }
     final String title =
         isAll ? 'All tasks' : (currentList?.name ?? 'Tasks');
+    traceLog.log('header build: isAll=$isAll listId=$listId -> "$title" '
+        '(lists=${lists.map((TaskList l) => '${l.id}:${l.name}').join(',')})');
     final String subtitle = progressLabel(totalCount, totalCount - pendingCount);
 
     return Column(
