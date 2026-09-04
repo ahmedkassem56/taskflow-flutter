@@ -264,7 +264,9 @@ class ItemsController extends _$ItemsController {
     }
   }
 
-  /// Non-optimistic delete (await + silent refresh).
+  /// Non-optimistic delete (await + silent refresh). The settle refresh is
+  /// forced so an in-flight 5s poll can't delay the row's removal (the
+  /// "deletes after a few seconds" bug — same class as the create delay).
   Future<void> deleteItem(int id) async {
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
     bus.begin();
@@ -276,7 +278,7 @@ class ItemsController extends _$ItemsController {
       bus.end();
       if (ref.mounted && ok) {
         await Future.wait<void>(<Future<void>>[
-          _refreshSilently(),
+          _refreshSilently(force: true),
           _refreshListsSilently(),
         ]);
       }

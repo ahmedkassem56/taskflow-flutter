@@ -58,7 +58,18 @@ class ListsController extends _$ListsController {
   }
 
   Future<void> renameList(int id, String name) async {
-    await _repo.renameList(id, name);
+    // Apply the rename locally from the PATCH response IMMEDIATELY, then
+    // refresh. Without the local apply, a refresh that fails (e.g. a stale
+    // pooled socket on mobile) would leave the OLD name on screen until the
+    // app restarts — the "rename only applies after restart" bug.
+    final TaskList renamed = await _repo.renameList(id, name);
+    final List<TaskList> current = state.value ?? const <TaskList>[];
+    if (ref.mounted && current.isNotEmpty) {
+      state = AsyncData<List<TaskList>>(<TaskList>[
+        for (final TaskList l in current)
+          if (l.id == id) renamed else l,
+      ]);
+    }
     await refresh();
   }
 
