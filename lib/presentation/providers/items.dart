@@ -40,14 +40,17 @@ class ItemsController extends _$ItemsController {
   StatusFilter _status = StatusFilter.all;
   String _query = '';
   DateTime? _lastMutationEnd;
-  /// Ids of items created on THIS controller that must be present in any
-  /// applied fetch. A poll whose read snapshot predates a create's commit
+  /// Ids of items created on THIS controller, each with the LIST it was
+  /// created in. A poll whose read snapshot predates a create's commit
   /// returns a list WITHOUT the new id — applying it would make the just-added
   /// row vanish (the trace-proven "appears, disappears, returns at next poll").
-  /// A response containing the id (post-commit snapshot) clears the entry; the
-  /// entry also expires after [_pendingCreateGuardMs] so a create that the
-  /// server later removes can't wedge the list forever.
-  final Map<int, DateTime> _pendingCreateGuards = <int, DateTime>{};
+  /// The guard is enforced ONLY for fetches covering that same list (or the
+  /// All view) — a fetch of a DIFFERENT list legitimately cannot contain the
+  /// new item and must not be discarded (the cross-list stale-rows bug the
+  /// integrity suite caught). A response containing the id (post-commit
+  /// snapshot) clears the entry; entries expire after [_pendingCreateGuardMs].
+  final Map<int, (int, DateTime)> _pendingCreateGuards =
+      <int, (int, DateTime)>{};
   static const Duration _pendingCreateGuardMs = Duration(seconds: 8);
 
   /// Ids of items deleted on THIS controller. The backend commits AFTER
@@ -192,10 +195,10 @@ class ItemsController extends _$ItemsController {
             recurrenceInterval: recurrenceInterval,
           );
       traceLog.log('create OK id=${created.id} "$title"');
-      // Register the guard BEFORE any subsequent fetch can apply a
-      // pre-commit snapshot that lacks this item.
+      // Register the guard (scoped to the created item's LIST) BEFORE any
+      // subsequent fetch can apply a pre-commit snapshot that lacks this item.
       _pendingCreateGuards[created.id] =
-          DateTime.now().add(_pendingCreateGuardMs);
+          (listId, DateTime.now().add(_pendingCreateGuardMs));
     } finally {
       bus.end();
       _lastMutationEnd = DateTime.now();
@@ -436,7 +439,7 @@ class ItemsController extends _$ItemsController {
           .fetchItems(listId: listId, status: status, q: q);
       traceLog.log('buildFetched ${items.length}');
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
-        final List<TaskItem>? guarded = _dropPreCommitSnapshots(items);
+        final List<TaskItem>? guarded = _dropPreCommitSnapshots(items, listId);
         if (guarded != null) return items;
         traceLog.log('buildFetch DISCARDED pre-commit snapshot');
         return state.value ?? const <TaskItem>[];
@@ -471,7 +474,8 @@ class ItemsController extends _$ItemsController {
           .read(taskflowRepositoryProvider)
           .fetchItems(listId: listId, status: status, q: q);
       if (ref.mounted && !_contextChanged(listId, status, q, gen)) {
-        final List<TaskItem>? guarded = _dropPreCommitSnapshots(items);
+        final List<TaskItem>? guarded =
+            _dropPreCommitSnapshots(items, listId);
         if (guarded == null) {
           traceLog.log(
               'fetch DISCARDED ${items.length} (pre-commit snapshot: '
@@ -495,19 +499,29 @@ class ItemsController extends _$ItemsController {
   }
 
   /// Returns [items] if it is NOT a pre-commit snapshot (it contains every
-  /// still-guarded just-created id and NONE of the guarded-deleted ids, or no
-  /// guards are active); otherwise returns null to signal "discard". A
+  /// still-guarded just-created id that the fetch COVERS — the same list or
+  /// the All view — and NONE of the guarded-deleted ids, or no guards are
+  /// active); otherwise returns null to signal "discard". A fetch of a
+  /// DIFFERENT list than a create guard's list legitimately cannot contain the
+  /// new item, so the guard is skipped for it (cross-list correctness). A
   /// guarded-created id that IS present clears its guard (server committed it);
   /// a guarded-deleted id that is ABSENT clears its guard (delete committed).
-  List<TaskItem>? _dropPreCommitSnapshots(List<TaskItem> items) {
+  List<TaskItem>? _dropPreCommitSnapshots(
+    List<TaskItem> items,
+    int? fetchListId,
+  ) {
     if (_pendingCreateGuards.isEmpty && _pendingDeleteGuards.isEmpty) {
       return items;
     }
     final DateTime now = DateTime.now();
     final Set<int> fetched = items.map((TaskItem e) => e.id).toSet();
     final List<int> missingCreated = <int>[];
-    _pendingCreateGuards.removeWhere((int id, DateTime expiry) {
+    _pendingCreateGuards.removeWhere((int id, (int, DateTime) g) {
+      final (int guardListId, DateTime expiry) = g;
       if (expiry.isBefore(now)) return true; // expired guard
+      // The guard only constrains fetches that should contain this item:
+      // the item's own list, or the All view (which is their union).
+      if (fetchListId != null && fetchListId != guardListId) return false;
       if (fetched.contains(id)) return true; // committed — clear
       missingCreated.add(id);
       return false;

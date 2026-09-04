@@ -162,7 +162,10 @@ class SnapshotServer {
   // -- the request handler ---------------------------------------------------
   Future<http.Response> handle(http.Request r) async {
     final String methodPath = '${r.method} ${r.url.path}';
-    log.add(methodPath);
+    // Log with the query string so tests can assert server-side filters
+    // (list_id/status/q) actually reached the wire.
+    final String query = r.url.query;
+    log.add(query.isEmpty ? methodPath : '$methodPath?$query');
     // Compute the response body NOW (snapshot at arrival).
     final http.Response? body = _compute(r);
     // Deliver later per knobs (state may have moved on — response stays stale).

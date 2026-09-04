@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:taskflow_app/app.dart';
 import 'package:taskflow_app/data/services/api_client.dart';
+import 'package:taskflow_app/data/services/settings_store.dart';
 import 'package:taskflow_app/presentation/providers/api_client.dart';
 
 import 'snapshot_server.dart';
@@ -24,6 +25,11 @@ Future<SnapshotServer> pumpApp(
 }) async {
   final SnapshotServer srv = server ?? SnapshotServer();
   SharedPreferences.setMockInitialValues(prefs ?? <String, Object>{});
+  // SettingsStore mirrors every write into a process-static map and reads it
+  // back when prefs have no value — without a reset, a list selection made by
+  // an earlier test in this process (selectList -> write 'taskflow.view')
+  // silently restores that list in the next pumpApp.
+  SettingsStore.resetForTest();
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
