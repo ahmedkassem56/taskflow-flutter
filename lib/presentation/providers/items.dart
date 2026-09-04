@@ -50,6 +50,15 @@ class ItemsController extends _$ItemsController {
   final Map<int, DateTime> _pendingCreateGuards = <int, DateTime>{};
   static const Duration _pendingCreateGuardMs = Duration(seconds: 8);
 
+  /// Ids of items deleted on THIS controller. The backend commits AFTER
+  /// sending the 204 (dependency-teardown commit), so the delete's own settle
+  /// refresh — and any poll in the lag window — can read pre-commit state that
+  /// STILL CONTAINS the deleted item and resurrect it. A fetch response that
+  /// contains a guarded-deleted id is a pre-commit snapshot → discard. The
+  /// guard clears when a response lacks the id (commit visible) or expires.
+  final Map<int, DateTime> _pendingDeleteGuards = <int, DateTime>{};
+  static const Duration _pendingDeleteGuardMs = Duration(seconds: 8);
+
   @override
   Future<List<TaskItem>> build() async {
     _armTimers();
@@ -264,9 +273,12 @@ class ItemsController extends _$ItemsController {
     }
   }
 
-  /// Non-optimistic delete (await + silent refresh). The settle refresh is
-  /// forced so an in-flight 5s poll can't delay the row's removal (the
-  /// "deletes after a few seconds" bug — same class as the create delay).
+  /// Delete: remove locally on the 204 + guard against pre-commit snapshots.
+  /// The backend commits AFTER sending the response, so the settle refresh (or
+  /// a poll in the lag window) can read pre-commit state that STILL CONTAINS
+  /// the item and resurrect it. On the 204 we remove the row locally (context-
+  /// guarded) and register a pending-delete guard so any such stale fetch is
+  /// discarded; the guard clears once a fetch lacks the id (commit visible).
   Future<void> deleteItem(int id) async {
     final MutationBus bus = ref.read(mutationBusProvider.notifier);
     bus.begin();
@@ -274,6 +286,19 @@ class ItemsController extends _$ItemsController {
     try {
       await ref.read(taskflowRepositoryProvider).deleteItem(id);
       ok = true;
+      _pendingDeleteGuards[id] =
+          DateTime.now().add(_pendingDeleteGuardMs);
+      // Locally remove the row now (the 204 is authoritative) — otherwise a
+      // discarded stale refresh would leave it visible until the next poll.
+      final List<TaskItem> current = state.value ?? const <TaskItem>[];
+      if (ref.mounted && current.any((TaskItem e) => e.id == id)) {
+        traceLog.log('delete LOCAL-REMOVED id=$id '
+            'rows ${current.length}->${current.length - 1}');
+        _setData(<TaskItem>[
+          for (final TaskItem e in current)
+            if (e.id != id) e,
+        ]);
+      }
     } finally {
       bus.end();
       if (ref.mounted && ok) {
@@ -470,22 +495,39 @@ class ItemsController extends _$ItemsController {
   }
 
   /// Returns [items] if it is NOT a pre-commit snapshot (it contains every
-  /// still-guarded just-created id, or none are guarded); otherwise returns
-  /// null to signal "discard" (the response predates a create's commit). A
-  /// guarded id that IS present clears its guard (server has committed; future
-  /// snapshots include it).
+  /// still-guarded just-created id and NONE of the guarded-deleted ids, or no
+  /// guards are active); otherwise returns null to signal "discard". A
+  /// guarded-created id that IS present clears its guard (server committed it);
+  /// a guarded-deleted id that is ABSENT clears its guard (delete committed).
   List<TaskItem>? _dropPreCommitSnapshots(List<TaskItem> items) {
-    if (_pendingCreateGuards.isEmpty) return items;
+    if (_pendingCreateGuards.isEmpty && _pendingDeleteGuards.isEmpty) {
+      return items;
+    }
     final DateTime now = DateTime.now();
     final Set<int> fetched = items.map((TaskItem e) => e.id).toSet();
-    final List<int> missing = <int>[];
+    final List<int> missingCreated = <int>[];
     _pendingCreateGuards.removeWhere((int id, DateTime expiry) {
       if (expiry.isBefore(now)) return true; // expired guard
       if (fetched.contains(id)) return true; // committed — clear
-      missing.add(id);
+      missingCreated.add(id);
       return false;
     });
-    return missing.isEmpty ? items : null;
+    // Delete guard: discard any response that STILL CONTAINS a just-deleted
+    // id (pre-commit snapshot — the server commits after its 204, so this
+    // response predates the visible delete). Clear when the id is absent.
+    final List<int> resurrected = <int>[];
+    _pendingDeleteGuards.removeWhere((int id, DateTime expiry) {
+      if (expiry.isBefore(now)) return true; // expired guard
+      if (!fetched.contains(id)) return true; // delete visible — clear
+      resurrected.add(id);
+      return false;
+    });
+    if (missingCreated.isNotEmpty || resurrected.isNotEmpty) {
+      traceLog.log('fetch DISCARDED (pre-commit snapshot: missing-created='
+          '$missingCreated resurrected-deleted=$resurrected)');
+      return null;
+    }
+    return items;
   }
 
   bool _contextChanged(int? listId, StatusFilter status, String q, int gen) {
